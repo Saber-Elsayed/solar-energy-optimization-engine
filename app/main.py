@@ -50,6 +50,12 @@ class OptimizeResponse(BaseModel):
     solar_production_kw: float = Field(..., description="Instantaneous or interval solar output (kW).")
     battery_level_kwh: float = Field(..., description="Current battery state of charge (kWh).")
     max_power_kw: float = Field(..., description="Maximum site or inverter power capability (kW).")
+    # Greedy allocation under max_power_kw (see /optimize handler).
+    active_devices: List[DeviceItem] = Field(default_factory=list, description="Devices that fit within the power cap.")
+    rejected_devices: List[DeviceItem] = Field(
+        default_factory=list,
+        description="Devices that would exceed the power cap if added.",
+    )
 
 
 @app.get("/")
@@ -61,7 +67,7 @@ def read_root():
 
 @app.post("/optimize", response_model=OptimizeResponse)
 def optimize(body: OptimizeRequest) -> OptimizeResponse:
-    """Accept a list of devices for optimization (validation only for now).
+    """Accept a list of devices and allocate them under a simulated site power cap.
 
     Pydantic validates the JSON body before this function runs; invalid payloads
     receive 422 with error details from FastAPI.
@@ -74,11 +80,33 @@ def optimize(body: OptimizeRequest) -> OptimizeResponse:
     battery_level_kwh = 10.0
     max_power_kw = 6.0
 
-    # Echo how many devices were received; core optimization logic can be wired here later.
+    # --- Simple greedy optimization (max concurrent power) ------------------------
+    # Step 1: Decide inspection order by priority. DeviceItem uses 1 = low and 5 = high,
+    # so "higher priority first" means larger numbers first → sort descending.
+    # (A naive ascending sort on 1..5 would try low-priority devices first.)
+    ordered_devices = sorted(body.devices, key=lambda d: d.priority, reverse=True)
+
+    # Step 2: Track how much power is already assigned to "on" devices.
+    current_load = 0.0
+
+    # Step 3: Walk devices in priority order; accept while under max_power_kw.
+    active_devices: List[DeviceItem] = []
+    rejected_devices: List[DeviceItem] = []
+    for device in ordered_devices:
+        if current_load + device.power_kw <= max_power_kw:
+            # Fits under the cap: count this device as active and add its power to the load.
+            active_devices.append(device)
+            current_load += device.power_kw
+        else:
+            # Would exceed the cap: skip and record as rejected.
+            rejected_devices.append(device)
+
     return OptimizeResponse(
         message="received devices",
         count=len(body.devices),
         solar_production_kw=solar_production_kw,
         battery_level_kwh=battery_level_kwh,
         max_power_kw=max_power_kw,
+        active_devices=active_devices,
+        rejected_devices=rejected_devices,
     )
