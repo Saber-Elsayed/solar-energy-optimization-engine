@@ -1,25 +1,21 @@
 """FastAPI application entrypoint.
 
-Responsibility:
-- Compose the web application (FastAPI), register routes, and configure
-  cross-cutting concerns at the API layer.
-
-Clean Architecture note:
-- This module may import from `core/`.
-- `core/` must not import from FastAPI (or anything in `app/`).
+This module creates the ASGI application object that Uvicorn runs
+(e.g. `uvicorn app.main:app --reload`).
 """
 
 from fastapi import FastAPI
 
-from app.api.routes import router as api_router
+# Instantiate the FastAPI application. This registers the app with Starlette/FastAPI
+# and enables automatic OpenAPI schema generation at /docs and /redoc.
+app = FastAPI(
+    title="Solar Energy Optimization Engine",
+    version="0.1.0",
+)
 
 
-def create_app() -> FastAPI:
-    """Create and configure the FastAPI application."""
-    app = FastAPI(title="Solar Energy Optimization Engine", version="0.1.0")
-    app.include_router(api_router)
-    return app
-
-
-app = create_app()
-
+@app.get("/")
+def read_root():
+    """Root endpoint: confirms the API process is up and responding to HTTP."""
+    # Return a small JSON payload; FastAPI serializes dicts to JSON automatically.
+    return {"message": "API is running"}
