@@ -4,7 +4,7 @@ This module creates the ASGI application object that Uvicorn runs
 (e.g. `uvicorn app.main:app --reload`).
 """
 
-from typing import List
+from typing import List, Tuple
 
 from fastapi import FastAPI
 from pydantic import BaseModel, Field
@@ -41,6 +41,17 @@ class OptimizeRequest(BaseModel):
     )
 
 
+class ScenarioResult(BaseModel):
+    """One named allocation outcome under the site power cap."""
+
+    name: str = Field(..., description="Scenario label for clients and dashboards.")
+    active_devices: List[DeviceItem] = Field(default_factory=list, description="Devices turned on under this scenario.")
+    rejected_devices: List[DeviceItem] = Field(
+        default_factory=list,
+        description="Devices not active here (over cap, or excluded by scenario rules).",
+    )
+
+
 class OptimizeResponse(BaseModel):
     """Payload returned after accepting a valid optimize request."""
 
@@ -50,11 +61,9 @@ class OptimizeResponse(BaseModel):
     solar_production_kw: float = Field(..., description="Instantaneous or interval solar output (kW).")
     battery_level_kwh: float = Field(..., description="Current battery state of charge (kWh).")
     max_power_kw: float = Field(..., description="Maximum site or inverter power capability (kW).")
-    # Greedy allocation under max_power_kw (see /optimize handler).
-    active_devices: List[DeviceItem] = Field(default_factory=list, description="Devices that fit within the power cap.")
-    rejected_devices: List[DeviceItem] = Field(
+    scenarios: List[ScenarioResult] = Field(
         default_factory=list,
-        description="Devices that would exceed the power cap if added.",
+        description="Multiple allocation strategies for the same request and site limits.",
     )
 
 
@@ -63,6 +72,30 @@ def read_root():
     """Root endpoint: confirms the API process is up and responding to HTTP."""
     # Return a small JSON payload; FastAPI serializes dicts to JSON automatically.
     return {"message": "API is running"}
+
+
+def _greedy_allocate_by_priority(
+    devices: List[DeviceItem],
+    max_power_kw: float,
+) -> Tuple[List[DeviceItem], List[DeviceItem]]:
+    """Greedy allocation: higher numeric priority first, then pack until power cap.
+
+    Returns (active_devices, rejected_devices) for the given *devices* list only.
+    """
+    # Step 1: Higher priority first (5 before 1 per DeviceItem schema).
+    ordered = sorted(devices, key=lambda d: d.priority, reverse=True)
+    # Step 2: Running sum of power for accepted devices.
+    current_load = 0.0
+    active: List[DeviceItem] = []
+    rejected: List[DeviceItem] = []
+    # Step 3: Accept while under cap; otherwise reject.
+    for device in ordered:
+        if current_load + device.power_kw <= max_power_kw:
+            active.append(device)
+            current_load += device.power_kw
+        else:
+            rejected.append(device)
+    return active, rejected
 
 
 @app.post("/optimize", response_model=OptimizeResponse)
@@ -80,26 +113,25 @@ def optimize(body: OptimizeRequest) -> OptimizeResponse:
     battery_level_kwh = 10.0
     max_power_kw = 6.0
 
-    # --- Simple greedy optimization (max concurrent power) ------------------------
-    # Step 1: Decide inspection order by priority. DeviceItem uses 1 = low and 5 = high,
-    # so "higher priority first" means larger numbers first → sort descending.
-    # (A naive ascending sort on 1..5 would try low-priority devices first.)
-    ordered_devices = sorted(body.devices, key=lambda d: d.priority, reverse=True)
+    # --- Scenario A: Max Usage — consider every device; pack as many as the greedy rule allows.
+    active_a, rejected_a = _greedy_allocate_by_priority(body.devices, max_power_kw)
+    scenario_max_usage = ScenarioResult(
+        name="Max Usage",
+        active_devices=active_a,
+        rejected_devices=rejected_a,
+    )
 
-    # Step 2: Track how much power is already assigned to "on" devices.
-    current_load = 0.0
-
-    # Step 3: Walk devices in priority order; accept while under max_power_kw.
-    active_devices: List[DeviceItem] = []
-    rejected_devices: List[DeviceItem] = []
-    for device in ordered_devices:
-        if current_load + device.power_kw <= max_power_kw:
-            # Fits under the cap: count this device as active and add its power to the load.
-            active_devices.append(device)
-            current_load += device.power_kw
-        else:
-            # Would exceed the cap: skip and record as rejected.
-            rejected_devices.append(device)
+    # --- Scenario B: High Priority Only — only priority 1–2 may be active (per product rule).
+    # Run the same greedy allocator on that subset. Devices with priority 3–5 are never
+    # active here; they are listed in rejected_devices so the full input set is partitioned.
+    eligible_low = [d for d in body.devices if d.priority in (1, 2)]
+    active_b, rejected_eligible_b = _greedy_allocate_by_priority(eligible_low, max_power_kw)
+    excluded_b = [d for d in body.devices if d.priority not in (1, 2)]
+    scenario_high_priority_only = ScenarioResult(
+        name="High Priority Only",
+        active_devices=active_b,
+        rejected_devices=rejected_eligible_b + excluded_b,
+    )
 
     return OptimizeResponse(
         message="received devices",
@@ -107,6 +139,5 @@ def optimize(body: OptimizeRequest) -> OptimizeResponse:
         solar_production_kw=solar_production_kw,
         battery_level_kwh=battery_level_kwh,
         max_power_kw=max_power_kw,
-        active_devices=active_devices,
-        rejected_devices=rejected_devices,
+        scenarios=[scenario_max_usage, scenario_high_priority_only],
     )
