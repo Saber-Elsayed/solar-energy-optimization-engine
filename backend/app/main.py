@@ -7,6 +7,7 @@ This module creates the ASGI application object that Uvicorn runs
 from typing import List, Tuple
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 # Instantiate the FastAPI application. This registers the app with Starlette/FastAPI
@@ -14,6 +15,15 @@ from pydantic import BaseModel, Field
 app = FastAPI(
     title="Solar Energy Optimization Engine",
     version="0.1.0",
+)
+
+# Expo Web (and other browsers) block cross-origin fetch unless the API sends CORS headers.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 
