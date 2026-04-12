@@ -42,10 +42,14 @@ class OptimizeRequest(BaseModel):
 
 
 class OptimizeResponse(BaseModel):
-    """Acknowledgement payload returned after accepting a valid optimize request."""
+    """Payload returned after accepting a valid optimize request."""
 
     message: str
     count: int
+    # Snapshot-style site telemetry (see /optimize handler for source of these values).
+    solar_production_kw: float = Field(..., description="Instantaneous or interval solar output (kW).")
+    battery_level_kwh: float = Field(..., description="Current battery state of charge (kWh).")
+    max_power_kw: float = Field(..., description="Maximum site or inverter power capability (kW).")
 
 
 @app.get("/")
@@ -62,8 +66,19 @@ def optimize(body: OptimizeRequest) -> OptimizeResponse:
     Pydantic validates the JSON body before this function runs; invalid payloads
     receive 422 with error details from FastAPI.
     """
+    # --- Simulated embedded / on-site data -----------------------------------------
+    # In production these would come from hardware (inverter, BMS, energy meter) or
+    # a telemetry service. Here we use fixed values to mimic what an embedded
+    # controller or gateway would already know about the site at request time.
+    solar_production_kw = 5.0
+    battery_level_kwh = 10.0
+    max_power_kw = 6.0
+
     # Echo how many devices were received; core optimization logic can be wired here later.
     return OptimizeResponse(
         message="received devices",
         count=len(body.devices),
+        solar_production_kw=solar_production_kw,
+        battery_level_kwh=battery_level_kwh,
+        max_power_kw=max_power_kw,
     )
