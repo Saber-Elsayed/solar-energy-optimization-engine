@@ -19,17 +19,17 @@ import { ThemedView } from '@/components/themed-view';
  */
 export type ApiDevicePayload = {
   name: string;
-  power_kw: number;
-  duration_minutes: number;
+  power: number;
+  duration: number;
   priority: number;
-  mandatory: boolean;
+  essential: boolean;
 };
 
-/** One scenario object returned inside `scenarios` from POST /optimize. */
-export type ApiScenario = {
-  name: string;
-  active_devices: ApiDevicePayload[];
-  rejected_devices: ApiDevicePayload[];
+/** Full shape returned by the updated backend /optimize response. */
+export type OptimizeApiResponse = {
+  can_run: ApiDevicePayload[];
+  cannot_run: ApiDevicePayload[];
+  remaining_energy: number;
 };
 
 /**
@@ -56,10 +56,10 @@ export type DeviceRow = {
 function toApiDevice(row: DeviceRow): ApiDevicePayload {
   return {
     name: row.name,
-    power_kw: row.power_kw,
-    duration_minutes: row.duration_minutes,
+    power: row.power_kw,
+    duration: row.duration_minutes,
     priority: row.priority,
-    mandatory: row.mandatory,
+    essential: row.mandatory,
   };
 }
 
@@ -71,8 +71,7 @@ function ApiDeviceRow({ device, index }: { device: ApiDevicePayload; index: numb
         {index + 1}. {device.name}
       </ThemedText>
       <ThemedText style={styles.deviceMeta}>
-        {device.power_kw} kW · {device.duration_minutes} min · priority {device.priority} ·{' '}
-        {device.mandatory ? 'mandatory' : 'optional'}
+        {device.power} kWh · priority {device.priority}
       </ThemedText>
     </ThemedView>
   );
@@ -95,8 +94,8 @@ export default function DeviceOptimizerScreen() {
   const [priority, setPriority] = useState('3');
   const [mandatory, setMandatory] = useState(false);
 
-  // Parsed `scenarios` from the last successful POST /optimize response body.
-  const [scenarios, setScenarios] = useState<ApiScenario[]>([]);
+  // Keep API result in state (can_run / cannot_run / remaining_energy).
+  const [scenarios, setScenarios] = useState<OptimizeApiResponse | null>(null);
 
   // Debug: confirm list updates in Metro / Xcode logs (helps when UI “looks” stuck).
   useEffect(() => {
@@ -208,20 +207,21 @@ export default function DeviceOptimizerScreen() {
       if (
         typeof data !== 'object' ||
         data === null ||
-        !('scenarios' in data) ||
-        !Array.isArray((data as { scenarios: unknown }).scenarios)
+        !('can_run' in data) ||
+        !('cannot_run' in data) ||
+        !('remaining_energy' in data)
       ) {
-        console.warn('Optimize response missing scenarios[]; storing empty list.', data);
-        setScenarios([]);
+        console.warn('Optimize response missing required fields; clearing results.', data);
+        setScenarios(null);
       } else {
-        setScenarios((data as { scenarios: ApiScenario[] }).scenarios);
+        setScenarios(data as OptimizeApiResponse);
       }
 
       // Log full parsed JSON after a successful read/parse (includes scenarios, telemetry, etc.).
       console.log('[Optimize] Parsed response body', data);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      setScenarios([]);
+      setScenarios(null);
       Alert.alert('Optimize failed', message);
       console.error('[Optimize] request failed — full error:', err);
       console.error('[Optimize] message:', message);
@@ -333,50 +333,42 @@ export default function DeviceOptimizerScreen() {
         <ThemedView style={styles.section}>
           <ThemedText type="subtitle">Optimization results</ThemedText>
           <ThemedText style={styles.hint}>
-            {scenarios.length} scenario{scenarios.length === 1 ? '' : 's'} from the last successful Optimize call.
+            Remaining energy: {scenarios ? `${scenarios.remaining_energy.toFixed(2)} kWh` : '--'}
           </ThemedText>
-          {scenarios.length === 0 ? (
-            <ThemedText style={styles.empty}>Run Optimize after a successful request to see scenarios here.</ThemedText>
+          {!scenarios ? (
+            <ThemedText style={styles.empty}>Run Optimize after a successful request to see results here.</ThemedText>
           ) : (
-            scenarios.map((scenario, scenarioIndex) => (
-              <ThemedView key={`scenario-${scenarioIndex}-${scenario.name}`} style={styles.scenarioCard}>
-                <ThemedText type="defaultSemiBold" style={styles.scenarioTitle}>
-                  {scenario.name}
-                </ThemedText>
+            <ThemedView style={[styles.scenarioCard, styles.canRunCard]}>
+              <ThemedText type="defaultSemiBold" style={[styles.scenarioTitle, styles.canRunTitle]}>
+                Can Run ({scenarios.can_run.length})
+              </ThemedText>
+              {scenarios.can_run.length === 0 ? (
+                <ThemedText style={styles.listEmpty}>None</ThemedText>
+              ) : (
+                <ThemedView style={styles.deviceList}>
+                  {scenarios.can_run.map((d, i) => (
+                    <ApiDeviceRow key={`can-run-${d.name}-${i}`} device={d} index={i} />
+                  ))}
+                </ThemedView>
+              )}
+            </ThemedView>
+          )}
 
-                <ThemedText style={styles.subsectionLabel}>Active devices ({scenario.active_devices.length})</ThemedText>
-                {scenario.active_devices.length === 0 ? (
-                  <ThemedText style={styles.listEmpty}>None</ThemedText>
-                ) : (
-                  <ThemedView style={styles.deviceList}>
-                    {scenario.active_devices.map((d, i) => (
-                      <ApiDeviceRow
-                        key={`active-${scenarioIndex}-${d.name}-${i}`}
-                        device={d}
-                        index={i}
-                      />
-                    ))}
-                  </ThemedView>
-                )}
-
-                <ThemedText style={styles.subsectionLabel}>
-                  Rejected devices ({scenario.rejected_devices.length})
-                </ThemedText>
-                {scenario.rejected_devices.length === 0 ? (
-                  <ThemedText style={styles.listEmpty}>None</ThemedText>
-                ) : (
-                  <ThemedView style={styles.deviceList}>
-                    {scenario.rejected_devices.map((d, i) => (
-                      <ApiDeviceRow
-                        key={`rejected-${scenarioIndex}-${d.name}-${i}`}
-                        device={d}
-                        index={i}
-                      />
-                    ))}
-                  </ThemedView>
-                )}
-              </ThemedView>
-            ))
+          {scenarios && (
+            <ThemedView style={[styles.scenarioCard, styles.cannotRunCard]}>
+              <ThemedText type="defaultSemiBold" style={[styles.scenarioTitle, styles.cannotRunTitle]}>
+                Cannot Run ({scenarios.cannot_run.length})
+              </ThemedText>
+              {scenarios.cannot_run.length === 0 ? (
+                <ThemedText style={styles.listEmpty}>None</ThemedText>
+              ) : (
+                <ThemedView style={styles.deviceList}>
+                  {scenarios.cannot_run.map((d, i) => (
+                    <ApiDeviceRow key={`cannot-run-${d.name}-${i}`} device={d} index={i} />
+                  ))}
+                </ThemedView>
+              )}
+            </ThemedView>
           )}
         </ThemedView>
       </ScrollView>
@@ -476,6 +468,20 @@ const styles = StyleSheet.create({
   scenarioTitle: {
     fontSize: 17,
     marginBottom: 4,
+  },
+  canRunCard: {
+    borderColor: '#9ad3a6',
+    backgroundColor: '#edf9ef',
+  },
+  cannotRunCard: {
+    borderColor: '#e1a0a0',
+    backgroundColor: '#fdf0f0',
+  },
+  canRunTitle: {
+    color: '#1f7a34',
+  },
+  cannotRunTitle: {
+    color: '#a12222',
   },
   subsectionLabel: {
     marginTop: 10,
