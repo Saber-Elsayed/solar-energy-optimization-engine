@@ -50,6 +50,11 @@ export type OptimizeApiResponse = {
   scenarios: ScenarioResult[];
   forecast: ForecastHourResult[];
   alerts: string[];
+  weather: {
+    city: string;
+    condition: string;
+    energy_estimate: number;
+  };
 };
 
 /**
@@ -119,6 +124,7 @@ export default function DeviceOptimizerScreen() {
   const [mandatory, setMandatory] = useState(false);
   const [startTime, setStartTime] = useState('08:00');
   const [endTime, setEndTime] = useState('18:00');
+  const [city, setCity] = useState('Tel Aviv');
 
   // Keep API result in state (multiple named optimization scenarios).
   const [scenarios, setScenarios] = useState<OptimizeApiResponse | null>(null);
@@ -201,7 +207,7 @@ export default function DeviceOptimizerScreen() {
     // Log current list right before building the body (catches stale UI vs state confusion).
     console.log('[Optimize] before request — devices in state', devices);
 
-    const payload = { devices: devices.map(toApiDevice) };
+    const payload = { city: city.trim(), devices: devices.map(toApiDevice) };
 
     try {
       // Log before the network call (URL + JSON body shape the server will receive).
@@ -246,7 +252,8 @@ export default function DeviceOptimizerScreen() {
         !('forecast' in data) ||
         !Array.isArray((data as { forecast: unknown }).forecast) ||
         !('alerts' in data) ||
-        !Array.isArray((data as { alerts: unknown }).alerts)
+        !Array.isArray((data as { alerts: unknown }).alerts) ||
+        !('weather' in data)
       ) {
         console.warn('Optimize response missing required fields; clearing results.', data);
         setScenarios(null);
@@ -281,6 +288,21 @@ export default function DeviceOptimizerScreen() {
           </ThemedText>
         </ThemedView>
 
+        {scenarios && (
+          <ThemedView style={styles.section}>
+            <ThemedView style={styles.weatherCard}>
+              <ThemedText type="defaultSemiBold" style={styles.weatherTitle}>
+                Weather
+              </ThemedText>
+              <ThemedText style={styles.weatherText}>City: {scenarios.weather.city}</ThemedText>
+              <ThemedText style={styles.weatherText}>Condition: {scenarios.weather.condition}</ThemedText>
+              <ThemedText style={styles.weatherText}>
+                Estimated energy: {scenarios.weather.energy_estimate.toFixed(2)} kWh
+              </ThemedText>
+            </ThemedView>
+          </ThemedView>
+        )}
+
         {scenarios && scenarios.alerts.length > 0 && (
           <ThemedView style={styles.section}>
             <ThemedView style={styles.alertsCard}>
@@ -299,6 +321,16 @@ export default function DeviceOptimizerScreen() {
 
         <ThemedView style={styles.section}>
           <ThemedText type="subtitle">New device</ThemedText>
+
+          <ThemedText style={styles.label}>City</ThemedText>
+          <TextInput
+            style={styles.input}
+            value={city}
+            onChangeText={setCity}
+            placeholder="e.g. Tel Aviv"
+            placeholderTextColor="#888"
+            autoCapitalize="words"
+          />
 
           <ThemedText style={styles.label}>Name</ThemedText>
           <TextInput
@@ -593,6 +625,22 @@ const styles = StyleSheet.create({
   },
   forecastHour: {
     fontSize: 16,
+  },
+  weatherCard: {
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#9ec5f8',
+    backgroundColor: '#eef5ff',
+    borderRadius: 10,
+    padding: 12,
+    gap: 4,
+  },
+  weatherTitle: {
+    color: '#1a4f8a',
+    fontSize: 16,
+  },
+  weatherText: {
+    color: '#1f3b63',
+    fontSize: 14,
   },
   alertsCard: {
     borderWidth: StyleSheet.hairlineWidth,
