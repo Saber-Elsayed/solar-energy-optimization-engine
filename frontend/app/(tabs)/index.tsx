@@ -23,12 +23,19 @@ export type ApiDevicePayload = {
   duration: number;
   priority: number;
   essential: boolean;
+  start_time: string;
+  end_time: string;
 };
 
 /** Full shape returned by the updated backend /optimize response. */
+export type CannotRunItem = {
+  device: ApiDevicePayload;
+  reason: string;
+};
+
 export type OptimizeApiResponse = {
   can_run: ApiDevicePayload[];
-  cannot_run: ApiDevicePayload[];
+  cannot_run: CannotRunItem[];
   remaining_energy: number;
 };
 
@@ -51,6 +58,8 @@ export type DeviceRow = {
   duration_minutes: number;
   priority: number;
   mandatory: boolean;
+  start_time: string;
+  end_time: string;
 };
 
 function toApiDevice(row: DeviceRow): ApiDevicePayload {
@@ -60,6 +69,8 @@ function toApiDevice(row: DeviceRow): ApiDevicePayload {
     duration: row.duration_minutes,
     priority: row.priority,
     essential: row.mandatory,
+    start_time: row.start_time,
+    end_time: row.end_time,
   };
 }
 
@@ -71,7 +82,7 @@ function ApiDeviceRow({ device, index }: { device: ApiDevicePayload; index: numb
         {index + 1}. {device.name}
       </ThemedText>
       <ThemedText style={styles.deviceMeta}>
-        {device.power} kWh · priority {device.priority}
+        {device.power} kWh · priority {device.priority} · {device.start_time}-{device.end_time}
       </ThemedText>
     </ThemedView>
   );
@@ -93,6 +104,8 @@ export default function DeviceOptimizerScreen() {
   const [durationMinutes, setDurationMinutes] = useState('');
   const [priority, setPriority] = useState('3');
   const [mandatory, setMandatory] = useState(false);
+  const [startTime, setStartTime] = useState('08:00');
+  const [endTime, setEndTime] = useState('18:00');
 
   // Keep API result in state (can_run / cannot_run / remaining_energy).
   const [scenarios, setScenarios] = useState<OptimizeApiResponse | null>(null);
@@ -131,6 +144,10 @@ export default function DeviceOptimizerScreen() {
       Alert.alert('Validation', 'Priority must be between 1 and 5.');
       return;
     }
+    if (!/^\d{2}:\d{2}$/.test(startTime) || !/^\d{2}:\d{2}$/.test(endTime)) {
+      Alert.alert('Validation', 'Start/End time must be in HH:MM format.');
+      return;
+    }
 
     const newDevice: DeviceRow = {
       id: `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
@@ -139,6 +156,8 @@ export default function DeviceOptimizerScreen() {
       duration_minutes: duration,
       priority: prio,
       mandatory,
+      start_time: startTime,
+      end_time: endTime,
     };
 
     console.log('[AddDevice] adding device', newDevice);
@@ -150,6 +169,8 @@ export default function DeviceOptimizerScreen() {
     setDurationMinutes('');
     setPriority('3');
     setMandatory(false);
+    setStartTime('08:00');
+    setEndTime('18:00');
   };
 
   /**
@@ -288,6 +309,26 @@ export default function DeviceOptimizerScreen() {
             maxLength={1}
           />
 
+          <ThemedText style={styles.label}>Start time (HH:MM)</ThemedText>
+          <TextInput
+            style={styles.input}
+            value={startTime}
+            onChangeText={setStartTime}
+            placeholder="08:00"
+            placeholderTextColor="#888"
+            autoCapitalize="none"
+          />
+
+          <ThemedText style={styles.label}>End time (HH:MM)</ThemedText>
+          <TextInput
+            style={styles.input}
+            value={endTime}
+            onChangeText={setEndTime}
+            placeholder="18:00"
+            placeholderTextColor="#888"
+            autoCapitalize="none"
+          />
+
           <ThemedView style={styles.switchRow}>
             <ThemedText style={styles.label}>Mandatory</ThemedText>
             <Switch value={mandatory} onValueChange={setMandatory} />
@@ -323,7 +364,7 @@ export default function DeviceOptimizerScreen() {
                 </ThemedText>
                 <ThemedText>
                   {d.duration_minutes} min · priority {d.priority} ·{' '}
-                  {d.mandatory ? 'mandatory' : 'optional'}
+                  {d.mandatory ? 'mandatory' : 'optional'} · {d.start_time}-{d.end_time}
                 </ThemedText>
               </ThemedView>
             ))
@@ -364,7 +405,10 @@ export default function DeviceOptimizerScreen() {
               ) : (
                 <ThemedView style={styles.deviceList}>
                   {scenarios.cannot_run.map((d, i) => (
-                    <ApiDeviceRow key={`cannot-run-${d.name}-${i}`} device={d} index={i} />
+                    <ThemedView key={`cannot-run-${d.device.name}-${i}`} style={styles.deviceRow}>
+                      <ApiDeviceRow device={d.device} index={i} />
+                      <ThemedText style={styles.reasonText}>Reason: {d.reason}</ThemedText>
+                    </ThemedView>
                   ))}
                 </ThemedView>
               )}
@@ -498,6 +542,11 @@ const styles = StyleSheet.create({
     paddingHorizontal: 2,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: '#e0e0e0',
+  },
+  reasonText: {
+    color: '#a12222',
+    fontSize: 13,
+    marginTop: 4,
   },
   deviceName: {
     fontSize: 15,
