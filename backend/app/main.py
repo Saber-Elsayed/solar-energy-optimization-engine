@@ -60,7 +60,7 @@ class CannotRunItem(BaseModel):
 
 
 class OptimizeResponse(BaseModel):
-    """Optimization result based on currently available mock energy."""
+    """One optimization scenario result based on the current constraints."""
 
     can_run: List[DeviceItem] = Field(
         default_factory=list,
@@ -71,6 +71,21 @@ class OptimizeResponse(BaseModel):
         description="Devices that cannot be scheduled, including the reason.",
     )
     remaining_energy: float = Field(..., ge=0, description="Energy left after scheduling.")
+
+
+class ScenarioResult(BaseModel):
+    """A named strategy and its optimization output."""
+
+    name: str
+    can_run: List[DeviceItem] = Field(default_factory=list)
+    cannot_run: List[CannotRunItem] = Field(default_factory=list)
+    remaining_energy: float = Field(..., ge=0)
+
+
+class MultiScenarioResponse(BaseModel):
+    """Response wrapper that returns multiple optimization strategies."""
+
+    scenarios: List[ScenarioResult] = Field(default_factory=list)
 
 
 @app.get("/")
@@ -105,58 +120,86 @@ def _is_within_schedule(current_minutes: int, start_hhmm: str, end_hhmm: str) ->
     return current_minutes >= start_minutes or current_minutes <= end_minutes
 
 
-@app.post("/optimize", response_model=OptimizeResponse)
-def optimize(body: OptimizeRequest) -> OptimizeResponse:
-    """Allocate devices against a fixed mock energy budget.
-
-    Pydantic validates the JSON body before this function runs; invalid payloads
-    receive 422 with error details from FastAPI.
-    """
-    # Mock available energy for now (kWh). In production this comes from telemetry/battery state.
-    available_energy = 5.0
+def _run_optimization_for_order(
+    ordered_devices: List[DeviceItem],
+    *,
+    available_energy: float,
+    current_minutes: int,
+) -> OptimizeResponse:
+    """Run reusable schedule + energy checks for a pre-sorted device list."""
     remaining_energy = available_energy
-    # Mock current time (HH:MM). Replace with real clock/telemetry in production.
-    current_time_hhmm = "12:00"
-    current_minutes = _hhmm_to_minutes(current_time_hhmm)
-
-    # Sort rule:
-    # 1) Essential devices first.
-    # 2) Within each essential group, higher priority first (5 -> 1).
-    ordered_devices = sorted(
-        body.devices,
-        key=lambda device: (not device.essential, -device.priority),
-    )
-
     can_run: List[DeviceItem] = []
     cannot_run: List[CannotRunItem] = []
 
-    # Greedy allocation:
-    # - First check schedule. If current time is outside schedule, reject immediately.
-    # - If a device fits in remaining energy, schedule it and reduce remaining_energy.
-    # - Otherwise mark it as cannot_run.
+    # Reusable greedy allocator:
+    # - Check schedule first.
+    # - If inside schedule, allocate if enough energy remains.
     for device in ordered_devices:
         if not _is_within_schedule(current_minutes, device.start_time, device.end_time):
-            cannot_run.append(
-                CannotRunItem(
-                    device=device,
-                    reason="outside schedule",
-                )
-            )
+            cannot_run.append(CannotRunItem(device=device, reason="outside schedule"))
             continue
 
         if device.power <= remaining_energy:
             can_run.append(device)
             remaining_energy -= device.power
         else:
-            cannot_run.append(
-                CannotRunItem(
-                    device=device,
-                    reason="insufficient energy",
-                )
-            )
+            cannot_run.append(CannotRunItem(device=device, reason="insufficient energy"))
 
     return OptimizeResponse(
         can_run=can_run,
         cannot_run=cannot_run,
         remaining_energy=remaining_energy,
+    )
+
+
+@app.post("/optimize", response_model=MultiScenarioResponse)
+def optimize(body: OptimizeRequest) -> MultiScenarioResponse:
+    """Return multiple optimization scenarios using different ordering strategies.
+
+    Pydantic validates the JSON body before this function runs; invalid payloads
+    receive 422 with error details from FastAPI.
+    """
+    # Mock available energy for now (kWh). In production this comes from telemetry/battery state.
+    available_energy = 5.0
+    # Mock current time (HH:MM). Replace with real clock/telemetry in production.
+    current_time_hhmm = "12:00"
+    current_minutes = _hhmm_to_minutes(current_time_hhmm)
+
+    # Scenario 1 - Priority First:
+    # Essential devices first, then higher priority first.
+    priority_first_devices = sorted(
+        body.devices,
+        key=lambda device: (not device.essential, -device.priority),
+    )
+
+    # Scenario 2 - Energy Saving:
+    # Lowest-power devices first to maximize the count of runnable devices.
+    energy_saving_devices = sorted(body.devices, key=lambda device: device.power)
+
+    # Scenario 3 - Performance:
+    # Highest-power devices first to prioritize heavy-load performance needs.
+    performance_devices = sorted(body.devices, key=lambda device: device.power, reverse=True)
+
+    priority_first_result = _run_optimization_for_order(
+        priority_first_devices,
+        available_energy=available_energy,
+        current_minutes=current_minutes,
+    )
+    energy_saving_result = _run_optimization_for_order(
+        energy_saving_devices,
+        available_energy=available_energy,
+        current_minutes=current_minutes,
+    )
+    performance_result = _run_optimization_for_order(
+        performance_devices,
+        available_energy=available_energy,
+        current_minutes=current_minutes,
+    )
+
+    return MultiScenarioResponse(
+        scenarios=[
+            ScenarioResult(name="Priority First", **priority_first_result.model_dump()),
+            ScenarioResult(name="Energy Saving", **energy_saving_result.model_dump()),
+            ScenarioResult(name="Performance", **performance_result.model_dump()),
+        ]
     )
