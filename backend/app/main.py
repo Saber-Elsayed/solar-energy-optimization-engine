@@ -4,7 +4,10 @@ This module creates the ASGI application object that Uvicorn runs
 (e.g. `uvicorn app.main:app --reload`).
 """
 
+import json
 from typing import List
+from urllib.parse import quote
+from urllib.request import urlopen
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -46,6 +49,7 @@ class DeviceItem(BaseModel):
 class OptimizeRequest(BaseModel):
     """Body for POST /optimize: a list of devices to consider."""
 
+    city: str = Field(..., min_length=1, description="City used to fetch weather-based energy estimate.")
     devices: List[DeviceItem] = Field(
         default_factory=list,
         description="Devices the optimizer should take into account (may be empty).",
@@ -88,6 +92,7 @@ class MultiScenarioResponse(BaseModel):
     scenarios: List[ScenarioResult] = Field(default_factory=list)
     forecast: List["ForecastHourResult"] = Field(default_factory=list)
     alerts: List[str] = Field(default_factory=list)
+    weather: "WeatherInfo"
 
 
 class ForecastPoint(BaseModel):
@@ -103,6 +108,14 @@ class ForecastHourResult(BaseModel):
     hour: str = Field(..., pattern=r"^\d{2}:\d{2}$")
     can_run: List[DeviceItem] = Field(default_factory=list)
     remaining_energy: float = Field(..., ge=0)
+
+
+class WeatherInfo(BaseModel):
+    """Weather summary used by the optimizer."""
+
+    city: str
+    condition: str
+    energy_estimate: float = Field(..., ge=0)
 
 
 @app.get("/")
@@ -154,6 +167,88 @@ def _build_mock_12h_forecast(start_hhmm: str) -> List[ForecastPoint]:
         mm = hour_minutes % 60
         forecast.append(ForecastPoint(hour=f"{hh:02d}:{mm:02d}", energy=energy))
     return forecast
+
+
+def _cloud_to_energy(cloud_cover: float) -> float:
+    """Convert cloud cover to a coarse energy estimate."""
+    if cloud_cover <= 20:
+        return 5.0
+    if cloud_cover <= 60:
+        return 3.0
+    return 1.0
+
+
+def _cloud_to_condition(cloud_cover: float) -> str:
+    """Convert cloud cover to a simple sky condition label."""
+    if cloud_cover <= 20:
+        return "Clear"
+    if cloud_cover <= 60:
+        return "Partly Cloudy"
+    return "Cloudy"
+
+
+def _fetch_weather_and_forecast(city: str) -> tuple[WeatherInfo, List[ForecastPoint]]:
+    """Fetch city weather (Open-Meteo) and convert to energy forecast.
+
+    Uses:
+    - Geocoding API to resolve city -> lat/lon
+    - Forecast API for current + hourly cloud cover
+    """
+    # 1) Resolve city coordinates.
+    geocode_url = (
+        "https://geocoding-api.open-meteo.com/v1/search"
+        f"?name={quote(city)}&count=1&language=en&format=json"
+    )
+    with urlopen(geocode_url, timeout=10) as response:
+        geo_payload = json.loads(response.read().decode("utf-8"))
+    results = geo_payload.get("results") or []
+    if not results:
+        raise ValueError(f"City not found: {city}")
+
+    first = results[0]
+    latitude = first["latitude"]
+    longitude = first["longitude"]
+    resolved_city = first.get("name", city)
+
+    # 2) Fetch cloud cover (current + hourly).
+    forecast_url = (
+        "https://api.open-meteo.com/v1/forecast"
+        f"?latitude={latitude}&longitude={longitude}"
+        "&current=cloud_cover"
+        "&hourly=cloud_cover"
+        "&forecast_days=1"
+        "&timezone=auto"
+    )
+    with urlopen(forecast_url, timeout=10) as response:
+        weather_payload = json.loads(response.read().decode("utf-8"))
+
+    current = weather_payload.get("current", {})
+    current_cloud_cover = float(current.get("cloud_cover", 50))
+    condition = _cloud_to_condition(current_cloud_cover)
+    energy_estimate = _cloud_to_energy(current_cloud_cover)
+
+    hourly = weather_payload.get("hourly", {})
+    hourly_times = hourly.get("time", [])
+    hourly_clouds = hourly.get("cloud_cover", [])
+    if not hourly_times or not hourly_clouds:
+        raise ValueError("Weather API returned no hourly cloud cover.")
+
+    forecast_points: List[ForecastPoint] = []
+    for idx, (time_iso, cloud) in enumerate(zip(hourly_times, hourly_clouds)):
+        if idx >= 12:
+            break
+        hour = str(time_iso)[11:16]  # "YYYY-MM-DDTHH:MM" -> "HH:MM"
+        forecast_points.append(ForecastPoint(hour=hour, energy=_cloud_to_energy(float(cloud))))
+
+    if not forecast_points:
+        raise ValueError("No forecast points generated from weather data.")
+
+    weather_info = WeatherInfo(
+        city=resolved_city,
+        condition=condition,
+        energy_estimate=energy_estimate,
+    )
+    return weather_info, forecast_points
 
 
 def _run_optimization_for_order(
@@ -248,10 +343,23 @@ def optimize(body: OptimizeRequest) -> MultiScenarioResponse:
     Pydantic validates the JSON body before this function runs; invalid payloads
     receive 422 with error details from FastAPI.
     """
-    # Mock available energy for now (kWh). In production this comes from telemetry/battery state.
-    available_energy = 5.0
-    # Mock current time (HH:MM). Replace with real clock/telemetry in production.
-    current_time_hhmm = "12:00"
+    # Fetch weather-based energy estimate and hourly forecast.
+    # Graceful fallback: if API fails, continue with deterministic mock values.
+    fallback_time = "12:00"
+    try:
+        weather_info, forecast_points = _fetch_weather_and_forecast(body.city)
+        available_energy = weather_info.energy_estimate
+        current_time_hhmm = forecast_points[0].hour
+    except Exception:
+        weather_info = WeatherInfo(
+            city=body.city,
+            condition="Unavailable",
+            energy_estimate=3.0,
+        )
+        available_energy = weather_info.energy_estimate
+        current_time_hhmm = fallback_time
+        forecast_points = _build_mock_12h_forecast(current_time_hhmm)
+
     current_minutes = _hhmm_to_minutes(current_time_hhmm)
 
     # Scenario 1 - Priority First:
@@ -286,10 +394,8 @@ def optimize(body: OptimizeRequest) -> MultiScenarioResponse:
     )
 
     # 12-hour forecast simulation:
-    # For each forecast hour, we rerun the same reusable optimization logic
-    # with that hour's energy value. This keeps behavior consistent while
-    # allowing hour-by-hour planning.
-    forecast_points = _build_mock_12h_forecast(current_time_hhmm)
+    # For each weather-derived forecast hour, rerun the same reusable optimization
+    # logic with that hour's estimated energy.
     forecast_results: List[ForecastHourResult] = []
     for point in forecast_points:
         hour_minutes = _hhmm_to_minutes(point.hour)
@@ -320,4 +426,5 @@ def optimize(body: OptimizeRequest) -> MultiScenarioResponse:
         ],
         forecast=forecast_results,
         alerts=alerts,
+        weather=weather_info,
     )

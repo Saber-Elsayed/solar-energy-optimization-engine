@@ -49,6 +49,7 @@ export type ForecastHourResult = {
 export type OptimizeApiResponse = {
   scenarios: ScenarioResult[];
   forecast: ForecastHourResult[];
+  alerts: string[];
 };
 
 /**
@@ -243,7 +244,9 @@ export default function DeviceOptimizerScreen() {
         !('scenarios' in data) ||
         !Array.isArray((data as { scenarios: unknown }).scenarios) ||
         !('forecast' in data) ||
-        !Array.isArray((data as { forecast: unknown }).forecast)
+        !Array.isArray((data as { forecast: unknown }).forecast) ||
+        !('alerts' in data) ||
+        !Array.isArray((data as { alerts: unknown }).alerts)
       ) {
         console.warn('Optimize response missing required fields; clearing results.', data);
         setScenarios(null);
@@ -277,6 +280,22 @@ export default function DeviceOptimizerScreen() {
             Add devices, then Optimize (POST {OPTIMIZE_URL}). Use your PC LAN IP on a physical device.
           </ThemedText>
         </ThemedView>
+
+        {scenarios && scenarios.alerts.length > 0 && (
+          <ThemedView style={styles.section}>
+            <ThemedView style={styles.alertsCard}>
+              <ThemedText type="defaultSemiBold" style={styles.alertsTitle}>
+                Alerts
+              </ThemedText>
+              {scenarios.alerts.map((alert, idx) => (
+                <ThemedView key={`alert-${idx}`} style={styles.alertRow}>
+                  <ThemedText style={styles.alertIcon}>[!]</ThemedText>
+                  <ThemedText style={styles.alertText}>{alert}</ThemedText>
+                </ThemedView>
+              ))}
+            </ThemedView>
+          </ThemedView>
+        )}
 
         <ThemedView style={styles.section}>
           <ThemedText type="subtitle">New device</ThemedText>
@@ -574,6 +593,35 @@ const styles = StyleSheet.create({
   },
   forecastHour: {
     fontSize: 16,
+  },
+  alertsCard: {
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#f0b27a',
+    backgroundColor: '#fff4e8',
+    borderRadius: 10,
+    padding: 12,
+    gap: 8,
+  },
+  alertsTitle: {
+    color: '#a84300',
+    fontSize: 16,
+  },
+  alertRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 8,
+    paddingVertical: 2,
+  },
+  alertIcon: {
+    color: '#b14d00',
+    fontSize: 14,
+    marginTop: 1,
+  },
+  alertText: {
+    color: '#8f2d0a',
+    fontSize: 14,
+    flex: 1,
+    lineHeight: 20,
   },
   subCard: {
     marginTop: 8,
