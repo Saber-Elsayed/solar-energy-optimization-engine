@@ -86,6 +86,22 @@ class MultiScenarioResponse(BaseModel):
     """Response wrapper that returns multiple optimization strategies."""
 
     scenarios: List[ScenarioResult] = Field(default_factory=list)
+    forecast: List["ForecastHourResult"] = Field(default_factory=list)
+
+
+class ForecastPoint(BaseModel):
+    """Mock forecast input point for one hour."""
+
+    hour: str = Field(..., pattern=r"^\d{2}:\d{2}$")
+    energy: float = Field(..., ge=0)
+
+
+class ForecastHourResult(BaseModel):
+    """Optimization output for one forecasted hour."""
+
+    hour: str = Field(..., pattern=r"^\d{2}:\d{2}$")
+    can_run: List[DeviceItem] = Field(default_factory=list)
+    remaining_energy: float = Field(..., ge=0)
 
 
 @app.get("/")
@@ -118,6 +134,25 @@ def _is_within_schedule(current_minutes: int, start_hhmm: str, end_hhmm: str) ->
         return start_minutes <= current_minutes <= end_minutes
     # Overnight schedule (crosses midnight): valid if after start OR before end.
     return current_minutes >= start_minutes or current_minutes <= end_minutes
+
+
+def _build_mock_12h_forecast(start_hhmm: str) -> List[ForecastPoint]:
+    """Create a 12-hour mock energy forecast starting at the provided hour.
+
+    The values are deterministic placeholders for development/testing and should
+    be replaced by a real forecaster later.
+    """
+    start_minutes = _hhmm_to_minutes(start_hhmm)
+    # 12 sample energy values (kWh) for next 12 hours.
+    energy_curve = [5, 4, 3, 2.5, 2, 1.5, 1, 0.5, 0.5, 1, 2, 3]
+
+    forecast: List[ForecastPoint] = []
+    for idx, energy in enumerate(energy_curve):
+        hour_minutes = (start_minutes + idx * 60) % (24 * 60)
+        hh = hour_minutes // 60
+        mm = hour_minutes % 60
+        forecast.append(ForecastPoint(hour=f"{hh:02d}:{mm:02d}", energy=energy))
+    return forecast
 
 
 def _run_optimization_for_order(
@@ -196,10 +231,32 @@ def optimize(body: OptimizeRequest) -> MultiScenarioResponse:
         current_minutes=current_minutes,
     )
 
+    # 12-hour forecast simulation:
+    # For each forecast hour, we rerun the same reusable optimization logic
+    # with that hour's energy value. This keeps behavior consistent while
+    # allowing hour-by-hour planning.
+    forecast_points = _build_mock_12h_forecast(current_time_hhmm)
+    forecast_results: List[ForecastHourResult] = []
+    for point in forecast_points:
+        hour_minutes = _hhmm_to_minutes(point.hour)
+        hour_result = _run_optimization_for_order(
+            priority_first_devices,
+            available_energy=point.energy,
+            current_minutes=hour_minutes,
+        )
+        forecast_results.append(
+            ForecastHourResult(
+                hour=point.hour,
+                can_run=hour_result.can_run,
+                remaining_energy=hour_result.remaining_energy,
+            )
+        )
+
     return MultiScenarioResponse(
         scenarios=[
             ScenarioResult(name="Priority First", **priority_first_result.model_dump()),
             ScenarioResult(name="Energy Saving", **energy_saving_result.model_dump()),
             ScenarioResult(name="Performance", **performance_result.model_dump()),
-        ]
+        ],
+        forecast=forecast_results,
     )
