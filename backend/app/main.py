@@ -118,11 +118,53 @@ class WeatherInfo(BaseModel):
     energy_estimate: float = Field(..., ge=0)
 
 
+class CitySuggestion(BaseModel):
+    """Autocomplete city item returned by /cities."""
+
+    name: str
+    country: str
+
+
 @app.get("/")
 def read_root():
     """Root endpoint: confirms the API process is up and responding to HTTP."""
     # Return a small JSON payload; FastAPI serializes dicts to JSON automatically.
     return {"message": "API is running"}
+
+
+@app.get("/cities", response_model=List[CitySuggestion])
+def search_cities(query: str) -> List[CitySuggestion]:
+    """Return city autocomplete suggestions for the given query.
+
+    Uses the public Open-Meteo geocoding API (no API key required).
+    Errors are handled gracefully by returning an empty list.
+    """
+    query_text = query.strip()
+    if len(query_text) < 2:
+        return []
+
+    # Limit suggestions to keep payload small and UI responsive.
+    limit = 8
+    geocode_url = (
+        "https://geocoding-api.open-meteo.com/v1/search"
+        f"?name={quote(query_text)}&count={limit}&language=en&format=json"
+    )
+
+    try:
+        with urlopen(geocode_url, timeout=10) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except Exception:
+        return []
+
+    results = payload.get("results") or []
+    suggestions: List[CitySuggestion] = []
+    for item in results[:limit]:
+        name = item.get("name")
+        country_code = item.get("country_code") or item.get("country")
+        if not name or not country_code:
+            continue
+        suggestions.append(CitySuggestion(name=name, country=country_code))
+    return suggestions
 
 
 def _hhmm_to_minutes(hhmm: str) -> int:
