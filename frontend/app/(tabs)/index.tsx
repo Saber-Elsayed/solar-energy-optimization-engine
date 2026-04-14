@@ -1,0 +1,512 @@
+import { useEffect, useState } from 'react';
+import {
+  Alert,
+  Platform,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Switch,
+  Text,
+  TextInput,
+} from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
+
+import { ThemedText } from '@/components/themed-text';
+import { ThemedView } from '@/components/themed-view';
+
+/**
+ * Backend device shape (POST body). No `id` — the API only needs these fields.
+ */
+export type ApiDevicePayload = {
+  name: string;
+  power_kw: number;
+  duration_minutes: number;
+  priority: number;
+  mandatory: boolean;
+};
+
+/** One scenario object returned inside `scenarios` from POST /optimize. */
+export type ApiScenario = {
+  name: string;
+  active_devices: ApiDevicePayload[];
+  rejected_devices: ApiDevicePayload[];
+};
+
+/**
+ * FastAPI `/optimize` (port 8000).
+ * Fix: On Android emulator, `127.0.0.1` is the emulator itself, not your PC — use 10.0.2.2.
+ * iOS Simulator / Expo Web on same machine: 127.0.0.1 is correct.
+ * Physical device: replace with your computer's LAN IP (e.g. 192.168.x.x).
+ */
+const OPTIMIZE_URL =
+  Platform.OS === 'android'
+    ? 'http://10.0.2.2:8000/optimize'
+    : 'http://127.0.0.1:8000/optimize';
+
+/** One saved device row in the UI list (includes local `id` for React keys). */
+export type DeviceRow = {
+  id: string;
+  name: string;
+  power_kw: number;
+  duration_minutes: number;
+  priority: number;
+  mandatory: boolean;
+};
+
+function toApiDevice(row: DeviceRow): ApiDevicePayload {
+  return {
+    name: row.name,
+    power_kw: row.power_kw,
+    duration_minutes: row.duration_minutes,
+    priority: row.priority,
+    mandatory: row.mandatory,
+  };
+}
+
+/** One line per API device — used under Active / Rejected lists. */
+function ApiDeviceRow({ device, index }: { device: ApiDevicePayload; index: number }) {
+  return (
+    <ThemedView style={styles.deviceRow}>
+      <ThemedText type="defaultSemiBold" style={styles.deviceName}>
+        {index + 1}. {device.name}
+      </ThemedText>
+      <ThemedText style={styles.deviceMeta}>
+        {device.power_kw} kW · {device.duration_minutes} min · priority {device.priority} ·{' '}
+        {device.mandatory ? 'mandatory' : 'optional'}
+      </ThemedText>
+    </ThemedView>
+  );
+}
+
+/**
+ * Device entry + optimization home screen.
+ * Form fields are controlled inputs; the list is the accumulated `devices` state.
+ */
+export default function DeviceOptimizerScreen() {
+  // --- State -----------------------------------------------------------------
+  // `devices`: list of devices the user has added (shown below the form).
+  const [devices, setDevices] = useState<DeviceRow[]>([]);
+
+  // Form fields: separate state per input so each keystroke/toggle re-renders correctly.
+  // Numbers are kept as strings while typing; we parse them when adding a device.
+  const [name, setName] = useState('');
+  const [powerKw, setPowerKw] = useState('');
+  const [durationMinutes, setDurationMinutes] = useState('');
+  const [priority, setPriority] = useState('3');
+  const [mandatory, setMandatory] = useState(false);
+
+  // Parsed `scenarios` from the last successful POST /optimize response body.
+  const [scenarios, setScenarios] = useState<ApiScenario[]>([]);
+
+  // Debug: confirm list updates in Metro / Xcode logs (helps when UI “looks” stuck).
+  useEffect(() => {
+    console.log('[Devices] current devices array', devices);
+  }, [devices]);
+
+  // --- Adding a device -------------------------------------------------------
+  // Validates, appends to `devices`, then resets the form so the user can enter another.
+  const handleAddDevice = () => {
+    const trimmedName = name.trim();
+    // Normalize locale decimals (e.g. "7,2" → "7.2") so parseFloat is reliable.
+    const power = parseFloat(powerKw.replace(',', '.'));
+    const duration = parseInt(durationMinutes, 10);
+    const prio = parseInt(priority, 10);
+
+    if (!trimmedName) {
+      console.warn('[AddDevice] blocked: empty name');
+      Alert.alert('Validation', 'Please enter a device name.');
+      return;
+    }
+    if (Number.isNaN(power) || power <= 0) {
+      console.warn('[AddDevice] blocked: invalid power_kw', powerKw);
+      Alert.alert('Validation', 'Power (kW) must be a positive number.');
+      return;
+    }
+    if (Number.isNaN(duration) || duration <= 0) {
+      console.warn('[AddDevice] blocked: invalid duration_minutes', durationMinutes);
+      Alert.alert('Validation', 'Duration must be a positive whole number of minutes.');
+      return;
+    }
+    if (Number.isNaN(prio) || prio < 1 || prio > 5) {
+      console.warn('[AddDevice] blocked: invalid priority', priority);
+      Alert.alert('Validation', 'Priority must be between 1 and 5.');
+      return;
+    }
+
+    const newDevice: DeviceRow = {
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+      name: trimmedName,
+      power_kw: power,
+      duration_minutes: duration,
+      priority: prio,
+      mandatory,
+    };
+
+    console.log('[AddDevice] adding device', newDevice);
+    setDevices((prev) => [...prev, newDevice]);
+
+    // Clear inputs after a successful add (fresh row for the next device).
+    setName('');
+    setPowerKw('');
+    setDurationMinutes('');
+    setPriority('3');
+    setMandatory(false);
+  };
+
+  /**
+   * POST `{ devices }` to the FastAPI `/optimize` endpoint.
+   *
+   * How `fetch` works (high level):
+   * - `fetch(url, options)` starts an HTTP request and returns a **Promise** that
+   *   resolves to a **Response** object (status, headers, body stream).
+   * - The Promise resolves when headers arrive; it does **not** throw on HTTP
+   *   error status (4xx/5xx) — check `response.ok` or `response.status`.
+   * - `await response.json()` reads the body and parses JSON (also async).
+   * - Network failures, DNS errors, etc. reject the Promise — use `try/catch`.
+   */
+  const handleOptimize = async () => {
+    // Log current list right before building the body (catches stale UI vs state confusion).
+    console.log('[Optimize] before request — devices in state', devices);
+
+    const payload = { devices: devices.map(toApiDevice) };
+
+    try {
+      // Log before the network call (URL + JSON body shape the server will receive).
+      console.log('[Optimize] Sending request', { url: OPTIMIZE_URL, body: payload });
+
+      const response = await fetch(OPTIMIZE_URL, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(payload),
+      });
+
+      // Log as soon as the HTTP response headers/status are available.
+      console.log('[Optimize] Response received', {
+        status: response.status,
+        ok: response.ok,
+        url: response.url,
+      });
+
+      const rawText = await response.text();
+      let data: unknown = null;
+      try {
+        data = rawText ? JSON.parse(rawText) : null;
+      } catch {
+        throw new Error(`Server did not return JSON (status ${response.status}). Body: ${rawText.slice(0, 200)}`);
+      }
+
+      if (!response.ok) {
+        const detail =
+          typeof data === 'object' && data !== null && 'detail' in data
+            ? JSON.stringify((data as { detail: unknown }).detail)
+            : rawText.slice(0, 300);
+        throw new Error(`HTTP ${response.status}: ${detail}`);
+      }
+
+      if (
+        typeof data !== 'object' ||
+        data === null ||
+        !('scenarios' in data) ||
+        !Array.isArray((data as { scenarios: unknown }).scenarios)
+      ) {
+        console.warn('Optimize response missing scenarios[]; storing empty list.', data);
+        setScenarios([]);
+      } else {
+        setScenarios((data as { scenarios: ApiScenario[] }).scenarios);
+      }
+
+      // Log full parsed JSON after a successful read/parse (includes scenarios, telemetry, etc.).
+      console.log('[Optimize] Parsed response body', data);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      setScenarios([]);
+      Alert.alert('Optimize failed', message);
+      console.error('[Optimize] request failed — full error:', err);
+      console.error('[Optimize] message:', message);
+    }
+  };
+
+  return (
+    <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
+      <ScrollView
+        style={styles.scroll}
+        contentContainerStyle={styles.scrollContent}
+        // Fix: default "handled" often eats the first tap on Add/Optimize while the keyboard
+        // is open (tap dismisses keyboard instead of firing onPress). "always" runs the button.
+        keyboardShouldPersistTaps="always"
+        keyboardDismissMode="on-drag">
+        <ThemedView style={styles.section}>
+          <ThemedText type="title">Devices</ThemedText>
+          <ThemedText style={styles.hint}>
+            Add devices, then Optimize (POST {OPTIMIZE_URL}). Use your PC LAN IP on a physical device.
+          </ThemedText>
+        </ThemedView>
+
+        <ThemedView style={styles.section}>
+          <ThemedText type="subtitle">New device</ThemedText>
+
+          <ThemedText style={styles.label}>Name</ThemedText>
+          <TextInput
+            style={styles.input}
+            value={name}
+            onChangeText={setName}
+            placeholder="e.g. EV charger"
+            placeholderTextColor="#888"
+            autoCapitalize="words"
+          />
+
+          <ThemedText style={styles.label}>Power (kW)</ThemedText>
+          <TextInput
+            style={styles.input}
+            value={powerKw}
+            onChangeText={setPowerKw}
+            placeholder="e.g. 7.2"
+            placeholderTextColor="#888"
+            keyboardType="decimal-pad"
+          />
+
+          <ThemedText style={styles.label}>Duration (minutes)</ThemedText>
+          <TextInput
+            style={styles.input}
+            value={durationMinutes}
+            onChangeText={setDurationMinutes}
+            placeholder="e.g. 120"
+            placeholderTextColor="#888"
+            keyboardType="number-pad"
+          />
+
+          <ThemedText style={styles.label}>Priority (1–5)</ThemedText>
+          <TextInput
+            style={styles.input}
+            value={priority}
+            onChangeText={setPriority}
+            placeholder="1 to 5"
+            placeholderTextColor="#888"
+            keyboardType="number-pad"
+            maxLength={1}
+          />
+
+          <ThemedView style={styles.switchRow}>
+            <ThemedText style={styles.label}>Mandatory</ThemedText>
+            <Switch value={mandatory} onValueChange={setMandatory} />
+          </ThemedView>
+
+          <Pressable
+            accessibilityRole="button"
+            android_ripple={{ color: 'rgba(255,255,255,0.3)' }}
+            style={({ pressed }) => [styles.button, pressed && styles.buttonPressed]}
+            onPress={handleAddDevice}>
+            <Text style={styles.buttonText}>Add Device</Text>
+          </Pressable>
+
+          <Pressable
+            accessibilityRole="button"
+            style={({ pressed }) => [styles.buttonSecondary, pressed && styles.buttonPressed]}
+            onPress={() => {
+              void handleOptimize();
+            }}>
+            <Text style={styles.buttonSecondaryText}>Optimize</Text>
+          </Pressable>
+        </ThemedView>
+
+        <ThemedView style={styles.section}>
+          <ThemedText type="subtitle">Device list ({devices.length})</ThemedText>
+          {devices.length === 0 ? (
+            <ThemedText style={styles.empty}>No devices yet. Add one above.</ThemedText>
+          ) : (
+            devices.map((d) => (
+              <ThemedView key={d.id} style={styles.card}>
+                <ThemedText type="defaultSemiBold">
+                  {d.name} — {d.power_kw} kW
+                </ThemedText>
+                <ThemedText>
+                  {d.duration_minutes} min · priority {d.priority} ·{' '}
+                  {d.mandatory ? 'mandatory' : 'optional'}
+                </ThemedText>
+              </ThemedView>
+            ))
+          )}
+        </ThemedView>
+
+        <ThemedView style={styles.section}>
+          <ThemedText type="subtitle">Optimization results</ThemedText>
+          <ThemedText style={styles.hint}>
+            {scenarios.length} scenario{scenarios.length === 1 ? '' : 's'} from the last successful Optimize call.
+          </ThemedText>
+          {scenarios.length === 0 ? (
+            <ThemedText style={styles.empty}>Run Optimize after a successful request to see scenarios here.</ThemedText>
+          ) : (
+            scenarios.map((scenario, scenarioIndex) => (
+              <ThemedView key={`scenario-${scenarioIndex}-${scenario.name}`} style={styles.scenarioCard}>
+                <ThemedText type="defaultSemiBold" style={styles.scenarioTitle}>
+                  {scenario.name}
+                </ThemedText>
+
+                <ThemedText style={styles.subsectionLabel}>Active devices ({scenario.active_devices.length})</ThemedText>
+                {scenario.active_devices.length === 0 ? (
+                  <ThemedText style={styles.listEmpty}>None</ThemedText>
+                ) : (
+                  <ThemedView style={styles.deviceList}>
+                    {scenario.active_devices.map((d, i) => (
+                      <ApiDeviceRow
+                        key={`active-${scenarioIndex}-${d.name}-${i}`}
+                        device={d}
+                        index={i}
+                      />
+                    ))}
+                  </ThemedView>
+                )}
+
+                <ThemedText style={styles.subsectionLabel}>
+                  Rejected devices ({scenario.rejected_devices.length})
+                </ThemedText>
+                {scenario.rejected_devices.length === 0 ? (
+                  <ThemedText style={styles.listEmpty}>None</ThemedText>
+                ) : (
+                  <ThemedView style={styles.deviceList}>
+                    {scenario.rejected_devices.map((d, i) => (
+                      <ApiDeviceRow
+                        key={`rejected-${scenarioIndex}-${d.name}-${i}`}
+                        device={d}
+                        index={i}
+                      />
+                    ))}
+                  </ThemedView>
+                )}
+              </ThemedView>
+            ))
+          )}
+        </ThemedView>
+      </ScrollView>
+    </SafeAreaView>
+  );
+}
+
+const styles = StyleSheet.create({
+  safe: {
+    flex: 1,
+  },
+  scroll: {
+    flex: 1,
+  },
+  scrollContent: {
+    paddingBottom: 24,
+  },
+  section: {
+    paddingHorizontal: 16,
+    paddingTop: 16,
+    gap: 8,
+  },
+  hint: {
+    opacity: 0.8,
+    marginTop: 4,
+  },
+  label: {
+    marginTop: 8,
+    fontSize: 14,
+  },
+  input: {
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#ccc',
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    fontSize: 16,
+    color: '#111',
+    backgroundColor: '#f9f9f9',
+  },
+  switchRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: 8,
+    paddingVertical: 4,
+  },
+  button: {
+    marginTop: 16,
+    backgroundColor: '#0a7ea4',
+    paddingVertical: 14,
+    borderRadius: 8,
+    alignItems: 'center',
+  },
+  buttonSecondary: {
+    marginTop: 10,
+    paddingVertical: 14,
+    borderRadius: 8,
+    alignItems: 'center',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#0a7ea4',
+  },
+  buttonPressed: {
+    opacity: 0.85,
+  },
+  buttonText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  buttonSecondaryText: {
+    color: '#0a7ea4',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  empty: {
+    opacity: 0.7,
+    marginTop: 8,
+  },
+  card: {
+    marginTop: 10,
+    padding: 12,
+    borderRadius: 8,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#ddd',
+    gap: 4,
+  },
+  scenarioCard: {
+    marginTop: 14,
+    padding: 14,
+    borderRadius: 10,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#c8c8c8',
+    backgroundColor: '#f6f8f9',
+    gap: 6,
+  },
+  scenarioTitle: {
+    fontSize: 17,
+    marginBottom: 4,
+  },
+  subsectionLabel: {
+    marginTop: 10,
+    fontSize: 14,
+    opacity: 0.85,
+    fontWeight: '600',
+  },
+  deviceList: {
+    marginTop: 4,
+    gap: 0,
+  },
+  deviceRow: {
+    paddingVertical: 8,
+    paddingHorizontal: 2,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#e0e0e0',
+  },
+  deviceName: {
+    fontSize: 15,
+  },
+  deviceMeta: {
+    fontSize: 14,
+    marginTop: 2,
+    opacity: 0.9,
+    lineHeight: 20,
+  },
+  listEmpty: {
+    fontSize: 14,
+    opacity: 0.55,
+    fontStyle: 'italic',
+    marginTop: 2,
+    marginBottom: 2,
+  },
+});
