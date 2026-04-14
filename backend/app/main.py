@@ -87,6 +87,7 @@ class MultiScenarioResponse(BaseModel):
 
     scenarios: List[ScenarioResult] = Field(default_factory=list)
     forecast: List["ForecastHourResult"] = Field(default_factory=list)
+    alerts: List[str] = Field(default_factory=list)
 
 
 class ForecastPoint(BaseModel):
@@ -187,6 +188,59 @@ def _run_optimization_for_order(
     )
 
 
+def _build_smart_alerts(
+    *,
+    baseline_result: OptimizeResponse,
+    forecast_results: List[ForecastHourResult],
+) -> List[str]:
+    """Generate simple, user-facing alerts from optimization + forecast outputs.
+
+    Alert rules:
+    - Low remaining energy warning.
+    - Essential device rejected warning.
+    - High-consumption rejected warning.
+    - Future-hour suggestion when a currently rejected device can run later.
+    """
+    alerts: List[str] = []
+    seen: set[str] = set()
+
+    def add_alert(message: str) -> None:
+        if message not in seen:
+            seen.add(message)
+            alerts.append(message)
+
+    # Low-energy signal from current/baseline scenario.
+    if baseline_result.remaining_energy <= 1.0:
+        add_alert("Low energy - consider reducing usage")
+
+    # Rejection-based alerts from current/baseline scenario.
+    rejected_devices = [item.device for item in baseline_result.cannot_run]
+    if any(device.essential for device in rejected_devices):
+        add_alert("Essential device cannot run")
+
+    # Mock threshold for "high consumption" in this prototype.
+    high_power_threshold = 3.0
+    if any(device.power >= high_power_threshold for device in rejected_devices):
+        add_alert("Consider delaying high consumption device")
+
+    # Forecast-based suggestions:
+    # If a currently rejected device appears as runnable in a forecast hour,
+    # suggest the earliest hour where it can run.
+    for rejected in rejected_devices:
+        suggested_hour = next(
+            (
+                hour_result.hour
+                for hour_result in forecast_results
+                if any(runnable.name == rejected.name for runnable in hour_result.can_run)
+            ),
+            None,
+        )
+        if suggested_hour:
+            add_alert(f"You can run {rejected.name} at {suggested_hour}")
+
+    return alerts
+
+
 @app.post("/optimize", response_model=MultiScenarioResponse)
 def optimize(body: OptimizeRequest) -> MultiScenarioResponse:
     """Return multiple optimization scenarios using different ordering strategies.
@@ -252,6 +306,12 @@ def optimize(body: OptimizeRequest) -> MultiScenarioResponse:
             )
         )
 
+    # Build smart alerts from current optimization + 12-hour forecast.
+    alerts = _build_smart_alerts(
+        baseline_result=priority_first_result,
+        forecast_results=forecast_results,
+    )
+
     return MultiScenarioResponse(
         scenarios=[
             ScenarioResult(name="Priority First", **priority_first_result.model_dump()),
@@ -259,4 +319,5 @@ def optimize(body: OptimizeRequest) -> MultiScenarioResponse:
             ScenarioResult(name="Performance", **performance_result.model_dump()),
         ],
         forecast=forecast_results,
+        alerts=alerts,
     )
