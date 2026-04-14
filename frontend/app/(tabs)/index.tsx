@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import {
+  ActivityIndicator,
   Alert,
   Platform,
   Pressable,
@@ -67,6 +68,15 @@ const OPTIMIZE_URL =
   Platform.OS === 'android'
     ? 'http://10.0.2.2:8000/optimize'
     : 'http://127.0.0.1:8000/optimize';
+const CITIES_URL =
+  Platform.OS === 'android'
+    ? 'http://10.0.2.2:8000/cities'
+    : 'http://127.0.0.1:8000/cities';
+
+type CitySuggestion = {
+  name: string;
+  country: string;
+};
 
 /** One saved device row in the UI list (includes local `id` for React keys). */
 export type DeviceRow = {
@@ -125,6 +135,10 @@ export default function DeviceOptimizerScreen() {
   const [startTime, setStartTime] = useState('08:00');
   const [endTime, setEndTime] = useState('18:00');
   const [city, setCity] = useState('Tel Aviv');
+  const [selectedCity, setSelectedCity] = useState<CitySuggestion | null>({ name: 'Tel Aviv', country: '' });
+  const [citySuggestions, setCitySuggestions] = useState<CitySuggestion[]>([]);
+  const [cityLoading, setCityLoading] = useState(false);
+  const [cityError, setCityError] = useState<string | null>(null);
 
   // Keep API result in state (multiple named optimization scenarios).
   const [scenarios, setScenarios] = useState<OptimizeApiResponse | null>(null);
@@ -133,6 +147,55 @@ export default function DeviceOptimizerScreen() {
   useEffect(() => {
     console.log('[Devices] current devices array', devices);
   }, [devices]);
+
+  // City autocomplete with debounce:
+  // - Wait briefly after typing before calling /cities.
+  // - Hide list when query is short/empty.
+  // - Show loading + error state for better UX.
+  useEffect(() => {
+    const query = city.trim();
+    if (query.length < 2) {
+      setCitySuggestions([]);
+      setCityLoading(false);
+      setCityError(null);
+      return;
+    }
+
+    const timer = setTimeout(async () => {
+      try {
+        setCityLoading(true);
+        setCityError(null);
+        const response = await fetch(`${CITIES_URL}?query=${encodeURIComponent(query)}`);
+        if (!response.ok) {
+          throw new Error(`City lookup failed (${response.status})`);
+        }
+        const data: unknown = await response.json();
+        if (!Array.isArray(data)) {
+          throw new Error('City lookup returned invalid format');
+        }
+        const suggestions = data
+          .filter(
+            (item): item is CitySuggestion =>
+              typeof item === 'object' &&
+              item !== null &&
+              'name' in item &&
+              'country' in item &&
+              typeof (item as { name: unknown }).name === 'string' &&
+              typeof (item as { country: unknown }).country === 'string'
+          )
+          .slice(0, 8);
+        setCitySuggestions(suggestions);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Unable to load cities';
+        setCitySuggestions([]);
+        setCityError(message);
+      } finally {
+        setCityLoading(false);
+      }
+    }, 400);
+
+    return () => clearTimeout(timer);
+  }, [city]);
 
   // --- Adding a device -------------------------------------------------------
   // Validates, appends to `devices`, then resets the form so the user can enter another.
@@ -272,6 +335,14 @@ export default function DeviceOptimizerScreen() {
     }
   };
 
+  const handleSelectCity = (item: CitySuggestion) => {
+    // Save selected city and fill the input.
+    setSelectedCity(item);
+    setCity(item.name);
+    setCitySuggestions([]);
+    setCityError(null);
+  };
+
   return (
     <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
       <ScrollView
@@ -326,11 +397,40 @@ export default function DeviceOptimizerScreen() {
           <TextInput
             style={styles.input}
             value={city}
-            onChangeText={setCity}
+            onChangeText={(text) => {
+              setCity(text);
+              setSelectedCity(null);
+            }}
             placeholder="e.g. Tel Aviv"
             placeholderTextColor="#888"
             autoCapitalize="words"
           />
+          {cityLoading && (
+            <ThemedView style={styles.cityStatusRow}>
+              <ActivityIndicator size="small" color="#0a7ea4" />
+              <ThemedText style={styles.cityStatusText}>Searching cities...</ThemedText>
+            </ThemedView>
+          )}
+          {!!cityError && <ThemedText style={styles.cityErrorText}>{cityError}</ThemedText>}
+          {citySuggestions.length > 0 && (
+            <ThemedView style={styles.cityDropdown}>
+              {citySuggestions.map((item, idx) => (
+                <Pressable
+                  key={`city-${item.name}-${item.country}-${idx}`}
+                  onPress={() => handleSelectCity(item)}
+                  style={({ pressed }) => [styles.cityOption, pressed && styles.buttonPressed]}>
+                  <ThemedText style={styles.cityOptionName}>{item.name}</ThemedText>
+                  <ThemedText style={styles.cityOptionCountry}>{item.country}</ThemedText>
+                </Pressable>
+              ))}
+            </ThemedView>
+          )}
+          {selectedCity && (
+            <ThemedText style={styles.selectedCityText}>
+              Selected city: {selectedCity.name}
+              {selectedCity.country ? ` (${selectedCity.country})` : ''}
+            </ThemedText>
+          )}
 
           <ThemedText style={styles.label}>Name</ThemedText>
           <TextInput
@@ -553,6 +653,47 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: '#111',
     backgroundColor: '#f9f9f9',
+  },
+  cityStatusRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 6,
+  },
+  cityStatusText: {
+    fontSize: 13,
+    opacity: 0.8,
+  },
+  cityErrorText: {
+    marginTop: 6,
+    fontSize: 13,
+    color: '#a12222',
+  },
+  cityDropdown: {
+    marginTop: 6,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#cfd6e4',
+    borderRadius: 8,
+    overflow: 'hidden',
+    backgroundColor: '#fff',
+  },
+  cityOption: {
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#e7ebf2',
+  },
+  cityOptionName: {
+    fontSize: 14,
+  },
+  cityOptionCountry: {
+    fontSize: 12,
+    opacity: 0.75,
+  },
+  selectedCityText: {
+    marginTop: 6,
+    fontSize: 13,
+    color: '#1f3b63',
   },
   switchRow: {
     flexDirection: 'row',
