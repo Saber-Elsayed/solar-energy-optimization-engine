@@ -40,8 +40,15 @@ export type ScenarioResult = {
   remaining_energy: number;
 };
 
+export type ForecastHourResult = {
+  hour: string;
+  can_run: ApiDevicePayload[];
+  remaining_energy: number;
+};
+
 export type OptimizeApiResponse = {
   scenarios: ScenarioResult[];
+  forecast: ForecastHourResult[];
 };
 
 /**
@@ -234,7 +241,9 @@ export default function DeviceOptimizerScreen() {
         typeof data !== 'object' ||
         data === null ||
         !('scenarios' in data) ||
-        !Array.isArray((data as { scenarios: unknown }).scenarios)
+        !Array.isArray((data as { scenarios: unknown }).scenarios) ||
+        !('forecast' in data) ||
+        !Array.isArray((data as { forecast: unknown }).forecast)
       ) {
         console.warn('Optimize response missing required fields; clearing results.', data);
         setScenarios(null);
@@ -425,6 +434,37 @@ export default function DeviceOptimizerScreen() {
             ))
           )}
         </ThemedView>
+
+        <ThemedView style={styles.section}>
+          <ThemedText type="subtitle">12-Hour Forecast</ThemedText>
+          {!scenarios ? (
+            <ThemedText style={styles.empty}>Forecast appears after a successful Optimize call.</ThemedText>
+          ) : (
+            scenarios.forecast.map((hourResult, hourIndex) => (
+              <ThemedView key={`forecast-${hourIndex}-${hourResult.hour}`} style={styles.forecastCard}>
+                <ThemedText type="defaultSemiBold" style={styles.forecastHour}>
+                  {hourResult.hour}
+                </ThemedText>
+                <ThemedText style={styles.hint}>
+                  Remaining energy: {hourResult.remaining_energy.toFixed(2)} kWh
+                </ThemedText>
+                {hourResult.can_run.length === 0 ? (
+                  <ThemedText style={styles.listEmpty}>No devices can run in this hour.</ThemedText>
+                ) : (
+                  <ThemedView style={styles.deviceList}>
+                    {hourResult.can_run.map((device, deviceIndex) => (
+                      <ApiDeviceRow
+                        key={`forecast-device-${hourIndex}-${device.name}-${deviceIndex}`}
+                        device={device}
+                        index={deviceIndex}
+                      />
+                    ))}
+                  </ThemedView>
+                )}
+              </ThemedView>
+            ))
+          )}
+        </ThemedView>
       </ScrollView>
     </SafeAreaView>
   );
@@ -522,6 +562,18 @@ const styles = StyleSheet.create({
   scenarioTitle: {
     fontSize: 17,
     marginBottom: 2,
+  },
+  forecastCard: {
+    marginTop: 10,
+    padding: 12,
+    borderRadius: 10,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#c8d4e8',
+    backgroundColor: '#f4f8ff',
+    gap: 4,
+  },
+  forecastHour: {
+    fontSize: 16,
   },
   subCard: {
     marginTop: 8,
