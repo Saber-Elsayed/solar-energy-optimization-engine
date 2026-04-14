@@ -39,6 +39,8 @@ class DeviceItem(BaseModel):
     duration: int = Field(..., gt=0, description="Intended runtime in minutes.")
     priority: int = Field(..., ge=1, le=5, description="Priority from 1 (low) to 5 (high).")
     essential: bool = Field(..., description="Essential devices are scheduled before non-essential devices.")
+    start_time: str = Field(..., pattern=r"^\d{2}:\d{2}$", description="Schedule start time in HH:MM.")
+    end_time: str = Field(..., pattern=r"^\d{2}:\d{2}$", description="Schedule end time in HH:MM.")
 
 
 class OptimizeRequest(BaseModel):
@@ -50,6 +52,13 @@ class OptimizeRequest(BaseModel):
     )
 
 
+class CannotRunItem(BaseModel):
+    """A rejected device with an explanation."""
+
+    device: DeviceItem
+    reason: str = Field(..., description="Reason the device cannot run right now.")
+
+
 class OptimizeResponse(BaseModel):
     """Optimization result based on currently available mock energy."""
 
@@ -57,9 +66,9 @@ class OptimizeResponse(BaseModel):
         default_factory=list,
         description="Devices that fit inside the currently remaining energy budget.",
     )
-    cannot_run: List[DeviceItem] = Field(
+    cannot_run: List[CannotRunItem] = Field(
         default_factory=list,
-        description="Devices that cannot be scheduled due to insufficient remaining energy.",
+        description="Devices that cannot be scheduled, including the reason.",
     )
     remaining_energy: float = Field(..., ge=0, description="Energy left after scheduling.")
 
@@ -69,6 +78,31 @@ def read_root():
     """Root endpoint: confirms the API process is up and responding to HTTP."""
     # Return a small JSON payload; FastAPI serializes dicts to JSON automatically.
     return {"message": "API is running"}
+
+
+def _hhmm_to_minutes(hhmm: str) -> int:
+    """Convert HH:MM to minutes from midnight."""
+    hours_str, minutes_str = hhmm.split(":")
+    hours = int(hours_str)
+    minutes = int(minutes_str)
+    if not (0 <= hours <= 23 and 0 <= minutes <= 59):
+        raise ValueError(f"Invalid HH:MM value: {hhmm}")
+    return hours * 60 + minutes
+
+
+def _is_within_schedule(current_minutes: int, start_hhmm: str, end_hhmm: str) -> bool:
+    """Return True when current time is inside [start, end], supporting overnight windows.
+
+    Example overnight window:
+    - start=22:00, end=06:00 is valid for times late night or early morning.
+    """
+    start_minutes = _hhmm_to_minutes(start_hhmm)
+    end_minutes = _hhmm_to_minutes(end_hhmm)
+
+    if start_minutes <= end_minutes:
+        return start_minutes <= current_minutes <= end_minutes
+    # Overnight schedule (crosses midnight): valid if after start OR before end.
+    return current_minutes >= start_minutes or current_minutes <= end_minutes
 
 
 @app.post("/optimize", response_model=OptimizeResponse)
@@ -81,6 +115,9 @@ def optimize(body: OptimizeRequest) -> OptimizeResponse:
     # Mock available energy for now (kWh). In production this comes from telemetry/battery state.
     available_energy = 5.0
     remaining_energy = available_energy
+    # Mock current time (HH:MM). Replace with real clock/telemetry in production.
+    current_time_hhmm = "12:00"
+    current_minutes = _hhmm_to_minutes(current_time_hhmm)
 
     # Sort rule:
     # 1) Essential devices first.
@@ -91,17 +128,32 @@ def optimize(body: OptimizeRequest) -> OptimizeResponse:
     )
 
     can_run: List[DeviceItem] = []
-    cannot_run: List[DeviceItem] = []
+    cannot_run: List[CannotRunItem] = []
 
     # Greedy allocation:
+    # - First check schedule. If current time is outside schedule, reject immediately.
     # - If a device fits in remaining energy, schedule it and reduce remaining_energy.
     # - Otherwise mark it as cannot_run.
     for device in ordered_devices:
+        if not _is_within_schedule(current_minutes, device.start_time, device.end_time):
+            cannot_run.append(
+                CannotRunItem(
+                    device=device,
+                    reason="outside schedule",
+                )
+            )
+            continue
+
         if device.power <= remaining_energy:
             can_run.append(device)
             remaining_energy -= device.power
         else:
-            cannot_run.append(device)
+            cannot_run.append(
+                CannotRunItem(
+                    device=device,
+                    reason="insufficient energy",
+                )
+            )
 
     return OptimizeResponse(
         can_run=can_run,
