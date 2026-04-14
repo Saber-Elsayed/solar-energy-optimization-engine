@@ -33,10 +33,15 @@ export type CannotRunItem = {
   reason: string;
 };
 
-export type OptimizeApiResponse = {
+export type ScenarioResult = {
+  name: string;
   can_run: ApiDevicePayload[];
   cannot_run: CannotRunItem[];
   remaining_energy: number;
+};
+
+export type OptimizeApiResponse = {
+  scenarios: ScenarioResult[];
 };
 
 /**
@@ -107,7 +112,7 @@ export default function DeviceOptimizerScreen() {
   const [startTime, setStartTime] = useState('08:00');
   const [endTime, setEndTime] = useState('18:00');
 
-  // Keep API result in state (can_run / cannot_run / remaining_energy).
+  // Keep API result in state (multiple named optimization scenarios).
   const [scenarios, setScenarios] = useState<OptimizeApiResponse | null>(null);
 
   // Debug: confirm list updates in Metro / Xcode logs (helps when UI “looks” stuck).
@@ -228,9 +233,8 @@ export default function DeviceOptimizerScreen() {
       if (
         typeof data !== 'object' ||
         data === null ||
-        !('can_run' in data) ||
-        !('cannot_run' in data) ||
-        !('remaining_energy' in data)
+        !('scenarios' in data) ||
+        !Array.isArray((data as { scenarios: unknown }).scenarios)
       ) {
         console.warn('Optimize response missing required fields; clearing results.', data);
         setScenarios(null);
@@ -373,46 +377,52 @@ export default function DeviceOptimizerScreen() {
 
         <ThemedView style={styles.section}>
           <ThemedText type="subtitle">Optimization results</ThemedText>
-          <ThemedText style={styles.hint}>
-            Remaining energy: {scenarios ? `${scenarios.remaining_energy.toFixed(2)} kWh` : '--'}
-          </ThemedText>
           {!scenarios ? (
             <ThemedText style={styles.empty}>Run Optimize after a successful request to see results here.</ThemedText>
           ) : (
-            <ThemedView style={[styles.scenarioCard, styles.canRunCard]}>
-              <ThemedText type="defaultSemiBold" style={[styles.scenarioTitle, styles.canRunTitle]}>
-                Can Run ({scenarios.can_run.length})
-              </ThemedText>
-              {scenarios.can_run.length === 0 ? (
-                <ThemedText style={styles.listEmpty}>None</ThemedText>
-              ) : (
-                <ThemedView style={styles.deviceList}>
-                  {scenarios.can_run.map((d, i) => (
-                    <ApiDeviceRow key={`can-run-${d.name}-${i}`} device={d} index={i} />
-                  ))}
-                </ThemedView>
-              )}
-            </ThemedView>
-          )}
+            scenarios.scenarios.map((scenario, scenarioIndex) => (
+              <ThemedView key={`scenario-${scenarioIndex}-${scenario.name}`} style={styles.scenarioCard}>
+                <ThemedText type="defaultSemiBold" style={styles.scenarioTitle}>
+                  {scenario.name}
+                </ThemedText>
+                <ThemedText style={styles.hint}>
+                  Remaining energy: {scenario.remaining_energy.toFixed(2)} kWh
+                </ThemedText>
 
-          {scenarios && (
-            <ThemedView style={[styles.scenarioCard, styles.cannotRunCard]}>
-              <ThemedText type="defaultSemiBold" style={[styles.scenarioTitle, styles.cannotRunTitle]}>
-                Cannot Run ({scenarios.cannot_run.length})
-              </ThemedText>
-              {scenarios.cannot_run.length === 0 ? (
-                <ThemedText style={styles.listEmpty}>None</ThemedText>
-              ) : (
-                <ThemedView style={styles.deviceList}>
-                  {scenarios.cannot_run.map((d, i) => (
-                    <ThemedView key={`cannot-run-${d.device.name}-${i}`} style={styles.deviceRow}>
-                      <ApiDeviceRow device={d.device} index={i} />
-                      <ThemedText style={styles.reasonText}>Reason: {d.reason}</ThemedText>
+                <ThemedView style={[styles.subCard, styles.canRunCard]}>
+                  <ThemedText type="defaultSemiBold" style={[styles.subCardTitle, styles.canRunTitle]}>
+                    Can Run ({scenario.can_run.length})
+                  </ThemedText>
+                  {scenario.can_run.length === 0 ? (
+                    <ThemedText style={styles.listEmpty}>None</ThemedText>
+                  ) : (
+                    <ThemedView style={styles.deviceList}>
+                      {scenario.can_run.map((d, i) => (
+                        <ApiDeviceRow key={`can-run-${scenarioIndex}-${d.name}-${i}`} device={d} index={i} />
+                      ))}
                     </ThemedView>
-                  ))}
+                  )}
                 </ThemedView>
-              )}
-            </ThemedView>
+
+                <ThemedView style={[styles.subCard, styles.cannotRunCard]}>
+                  <ThemedText type="defaultSemiBold" style={[styles.subCardTitle, styles.cannotRunTitle]}>
+                    Cannot Run ({scenario.cannot_run.length})
+                  </ThemedText>
+                  {scenario.cannot_run.length === 0 ? (
+                    <ThemedText style={styles.listEmpty}>None</ThemedText>
+                  ) : (
+                    <ThemedView style={styles.deviceList}>
+                      {scenario.cannot_run.map((item, i) => (
+                        <ThemedView key={`cannot-run-${scenarioIndex}-${item.device.name}-${i}`} style={styles.deviceRow}>
+                          <ApiDeviceRow device={item.device} index={i} />
+                          <ThemedText style={styles.reasonText}>Reason: {item.reason}</ThemedText>
+                        </ThemedView>
+                      ))}
+                    </ThemedView>
+                  )}
+                </ThemedView>
+              </ThemedView>
+            ))
           )}
         </ThemedView>
       </ScrollView>
@@ -511,6 +521,16 @@ const styles = StyleSheet.create({
   },
   scenarioTitle: {
     fontSize: 17,
+    marginBottom: 2,
+  },
+  subCard: {
+    marginTop: 8,
+    padding: 10,
+    borderRadius: 8,
+    borderWidth: StyleSheet.hairlineWidth,
+  },
+  subCardTitle: {
+    fontSize: 15,
     marginBottom: 4,
   },
   canRunCard: {
