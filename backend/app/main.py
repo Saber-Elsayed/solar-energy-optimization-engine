@@ -5,13 +5,18 @@ This module creates the ASGI application object that Uvicorn runs
 """
 
 import json
-from typing import List
+import logging
+import os
+from datetime import datetime, timezone
+from typing import Any, List
 from urllib.parse import quote
 from urllib.request import urlopen
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
+from pymongo import MongoClient
+from pymongo.errors import PyMongoError
 
 # Instantiate the FastAPI application. This registers the app with Starlette/FastAPI
 # and enables automatic OpenAPI schema generation at /docs and /redoc.
@@ -19,6 +24,24 @@ app = FastAPI(
     title="Solar Energy Optimization Engine",
     version="0.1.0",
 )
+logger = logging.getLogger(__name__)
+
+MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017")
+mongo_client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=3000)
+energy_collection = mongo_client["energy_db"]["energy"]
+
+
+def get_energy_collection():
+    """Return a healthy MongoDB collection handle, reconnecting if needed."""
+    global mongo_client, energy_collection
+    try:
+        mongo_client.admin.command("ping")
+    except PyMongoError:
+        print("[DEBUG] MongoDB ping failed, reconnecting...")
+        mongo_client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=3000)
+        energy_collection = mongo_client["energy_db"]["energy"]
+        mongo_client.admin.command("ping")
+    return energy_collection
 
 # Expo Web (and other browsers) block cross-origin fetch unless the API sends CORS headers.
 app.add_middleware(
@@ -125,6 +148,15 @@ class CitySuggestion(BaseModel):
     country: str
 
 
+class EnergyDataRequest(BaseModel):
+    """Body for POST /energy-data."""
+
+    voltage: float
+    current: float
+    temperature: float
+    model_config = ConfigDict(extra="ignore")
+
+
 @app.get("/")
 def read_root():
     """Root endpoint: confirms the API process is up and responding to HTTP."""
@@ -165,6 +197,44 @@ def search_cities(query: str) -> List[CitySuggestion]:
             continue
         suggestions.append(CitySuggestion(name=name, country=country_code))
     return suggestions
+
+
+@app.post("/energy-data")
+async def receive_energy_data(request: Request, payload: EnergyDataRequest):
+    """Receive energy telemetry and store it in MongoDB."""
+    raw_payload = await request.json()
+    print(f"[DEBUG] Raw incoming /energy-data JSON: {raw_payload}")
+
+    document = {
+        **payload.model_dump(),
+        "timestamp": datetime.now(timezone.utc),
+    }
+    print(f"[DEBUG] Parsed /energy-data payload: {payload.model_dump()}")
+    print(f"[DEBUG] Document to save in MongoDB: {document}")
+
+    try:
+        collection = get_energy_collection()
+        result = collection.insert_one(document)
+    except PyMongoError as exc:
+        logger.exception("Failed to save energy data to MongoDB")
+        raise HTTPException(status_code=500, detail="Failed to save energy data") from exc
+
+    logger.info("Energy data received, inserted_id=%s", result.inserted_id)
+    return {"status": "ok", "id": str(result.inserted_id)}
+
+
+@app.get("/energy-data")
+def list_energy_data() -> List[dict[str, Any]]:
+    """Return all stored energy records, excluding MongoDB internal _id."""
+    try:
+        collection = get_energy_collection()
+        records = list(collection.find({}, {"_id": 0}))
+    except PyMongoError as exc:
+        logger.exception("Failed to fetch energy data from MongoDB")
+        raise HTTPException(status_code=500, detail="Failed to fetch energy data") from exc
+
+    print(f"[DEBUG] Returning {len(records)} energy records from MongoDB")
+    return records
 
 
 def _hhmm_to_minutes(hhmm: str) -> int:
