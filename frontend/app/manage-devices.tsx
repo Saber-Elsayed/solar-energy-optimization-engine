@@ -64,7 +64,13 @@ function minutesToHHMM(totalMinutes: number): string {
 }
 
 function hhmmToMinutes(hhmm: string): number | null {
-  const match = /^(\d{1,2}):([0-5]\d)$/.exec(hhmm.trim());
+  const trimmed = hhmm.trim();
+  const minutesOnly = Number(trimmed);
+  if (!Number.isNaN(minutesOnly) && minutesOnly > 0) {
+    return Math.round(minutesOnly);
+  }
+
+  const match = /^(\d{1,2}):([0-5]\d)$/.exec(trimmed);
   if (!match) return null;
   const hh = Number(match[1]);
   const mm = Number(match[2]);
@@ -112,7 +118,7 @@ export default function ManageDevicesScreen() {
   const loadDevices = async () => {
     try {
       setLoadingDevices(true);
-      const res = await fetch(DEVICES_URL);
+      const res = await fetch(`${DEVICES_URL}?t=${Date.now()}`);
       if (!res.ok) {
         throw new Error(`GET /devices failed (${res.status})`);
       }
@@ -152,7 +158,7 @@ export default function ManageDevicesScreen() {
     }
     if (parsedDuration === null || parsedDuration <= 0) {
       console.warn('[ManageDevices] validation failed: duration', duration);
-      return Alert.alert('Validation', 'Usage time must be in HH:MM format (example: 05:22).');
+      return Alert.alert('Validation', 'Usage time must be HH:MM (05:22) or minutes (e.g. 30).');
     }
     if (Number.isNaN(parsedPriority) || parsedPriority < 1 || parsedPriority > 5) {
       console.warn('[ManageDevices] validation failed: priority', priority);
@@ -188,10 +194,27 @@ export default function ManageDevicesScreen() {
         console.error('[ManageDevices] request failed', { status: res.status, body: errorText });
         throw new Error(`${method} failed (${res.status}): ${errorText}`);
       }
-      const bodyText = await res.text();
-      console.log('[ManageDevices] request success', { status: res.status, body: bodyText });
+      const responseData = (await res.json()) as { id?: string };
+      console.log('[ManageDevices] request success', { status: res.status, responseData });
+
+      if (!isEditing && responseData?.id) {
+        setDevices((curr) => [
+          {
+            id: responseData.id,
+            name: payload.name,
+            power: payload.power,
+            duration: payload.duration,
+            priority: payload.priority,
+            essential: payload.essential,
+            startTime: hhmmToHourText(payload.start_time),
+            endTime: hhmmToHourText(payload.end_time),
+          },
+          ...curr,
+        ]);
+      }
       await loadDevices();
       resetForm();
+      Alert.alert('Success', isEditing ? 'Device updated successfully' : 'Device added successfully');
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to save device';
       Alert.alert('Save failed', message);
@@ -229,7 +252,7 @@ export default function ManageDevicesScreen() {
       <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="always">
         <ThemedView style={styles.card}>
           <ThemedText type="subtitle">Add / Edit Product</ThemedText>
-          <ThemedText style={styles.note}>Usage Time format: HH:MM (example: 05:22).</ThemedText>
+          <ThemedText style={styles.note}>Usage Time: HH:MM (05:22) or minutes (30).</ThemedText>
 
           <ThemedText style={styles.label}>Name</ThemedText>
           <TextInput style={styles.input} value={name} onChangeText={setName} autoCapitalize="words" />
