@@ -180,6 +180,19 @@ export default function HomeScreen() {
     void fetchWeather(item.name);
   };
 
+  const deleteDevice = async (deviceId: string) => {
+    const previous = devices;
+    setDevices((curr) => curr.filter((item) => item.id !== deviceId));
+    try {
+      const res = await fetch(`${DEVICES_URL}/${deviceId}`, { method: 'DELETE' });
+      if (!res.ok) {
+        throw new Error(`DELETE failed (${res.status})`);
+      }
+    } catch {
+      setDevices(previous);
+    }
+  };
+
   return (
     <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
       <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="always">
@@ -200,31 +213,31 @@ export default function HomeScreen() {
           </Pressable>
         </ThemedView>
 
-        <ThemedView style={styles.row}>
-          <ThemedView style={[styles.card, styles.infoBlue]}>
-            <ThemedText type="subtitle">Weather</ThemedText>
-            <ThemedText style={styles.label}>City</ThemedText>
-            <TextInput style={styles.input} value={city} onChangeText={setCity} autoCapitalize="words" />
-            {citySuggestions.length > 0 && (
-              <ThemedView style={styles.dropdown}>
-                {citySuggestions.map((item, idx) => (
-                  <Pressable key={`${item.name}-${item.country}-${idx}`} style={({ pressed }) => [styles.cityRow, pressed && styles.buttonPressed]} onPress={() => onSelectCity(item)}>
-                    <ThemedText>{item.name}</ThemedText>
-                    <ThemedText style={styles.muted}>{item.country}</ThemedText>
-                  </Pressable>
-                ))}
-              </ThemedView>
-            )}
-            {weatherLoading ? <ActivityIndicator size="small" color="#0a7ea4" /> : null}
-            {selectedCity && weather && (
-              <ThemedView style={styles.subCard}>
-                <ThemedText>City: {weather.city ?? selectedCity.name}</ThemedText>
-                <ThemedText>Temperature: {weather.temperature ?? 'N/A'}</ThemedText>
-                <ThemedText>Condition: {weather.condition ?? 'N/A'}</ThemedText>
-              </ThemedView>
-            )}
-          </ThemedView>
+        <ThemedView style={[styles.card, styles.infoBlue]}>
+          <ThemedText type="subtitle">Weather</ThemedText>
+          <ThemedText style={styles.label}>City</ThemedText>
+          <TextInput style={styles.input} value={city} onChangeText={setCity} autoCapitalize="words" />
+          {citySuggestions.length > 0 && (
+            <ThemedView style={styles.dropdown}>
+              {citySuggestions.map((item, idx) => (
+                <Pressable key={`${item.name}-${item.country}-${idx}`} style={({ pressed }) => [styles.cityRow, pressed && styles.buttonPressed]} onPress={() => onSelectCity(item)}>
+                  <ThemedText>{item.name}</ThemedText>
+                  <ThemedText style={styles.muted}>{item.country}</ThemedText>
+                </Pressable>
+              ))}
+            </ThemedView>
+          )}
+          {weatherLoading ? <ActivityIndicator size="small" color="#0a7ea4" /> : null}
+          {selectedCity && weather && (
+            <ThemedView style={styles.subCard}>
+              <ThemedText>City: {weather.city ?? selectedCity.name}</ThemedText>
+              <ThemedText>Temperature: {weather.temperature ?? 'N/A'}</ThemedText>
+              <ThemedText>Condition: {weather.condition ?? 'N/A'}</ThemedText>
+            </ThemedView>
+          )}
+        </ThemedView>
 
+        <ThemedView style={styles.row}>
           <ThemedView style={[styles.card, styles.infoBlue]}>
             <ThemedText type="subtitle">Battery</ThemedText>
             {loading ? (
@@ -244,24 +257,6 @@ export default function HomeScreen() {
               keyboardType="decimal-pad"
             />
             <ThemedText style={styles.muted}>Optimization budget: {optimizationBudgetKw.toFixed(2)} kW</ThemedText>
-          </ThemedView>
-        </ThemedView>
-
-        <ThemedView style={styles.row}>
-          <ThemedView style={[styles.card, styles.safeGreen]}>
-            <ThemedText type="subtitle">Devices ({devices.length})</ThemedText>
-            {devices.length === 0 ? (
-              <ThemedText style={styles.muted}>No products saved yet.</ThemedText>
-            ) : (
-              devices.map((d) => (
-                <ThemedView key={d.id} style={styles.subCard}>
-                  <ThemedText type="defaultSemiBold">{d.name}</ThemedText>
-                  <ThemedText>
-                    {d.power} kW · priority {d.priority} · {d.essential ? 'mandatory' : 'optional'}
-                  </ThemedText>
-                </ThemedView>
-              ))
-            )}
           </ThemedView>
 
           <ThemedView style={[styles.card, styles.safeGreen]}>
@@ -288,6 +283,37 @@ export default function HomeScreen() {
               ))
             )}
           </ThemedView>
+        </ThemedView>
+
+        <ThemedView style={[styles.card, styles.infoNeutral]}>
+          <ThemedText type="subtitle">Devices ({devices.length})</ThemedText>
+          {devices.length === 0 ? (
+            <ThemedText style={styles.muted}>No products saved yet.</ThemedText>
+          ) : (
+            devices.map((d) => (
+              <ThemedView key={d.id} style={styles.deviceRowCard}>
+                <ThemedView style={styles.deviceRowTop}>
+                  <ThemedText type="defaultSemiBold">{d.name}</ThemedText>
+                  <ThemedText style={styles.devicePowerBadge}>{d.power} kW</ThemedText>
+                </ThemedView>
+                <ThemedText style={styles.muted}>
+                  Priority {d.priority} · {d.essential ? 'mandatory' : 'optional'}
+                </ThemedText>
+                <ThemedView style={styles.deviceActions}>
+                  <Pressable
+                    style={({ pressed }) => [styles.inlineEditButton, pressed && styles.buttonPressed]}
+                    onPress={() => router.push('/manage-devices')}>
+                    <Text style={styles.inlineEditButtonText}>Edit</Text>
+                  </Pressable>
+                  <Pressable
+                    style={({ pressed }) => [styles.inlineDeleteButton, pressed && styles.buttonPressed]}
+                    onPress={() => void deleteDevice(d.id)}>
+                    <Text style={styles.inlineDeleteButtonText}>Delete</Text>
+                  </Pressable>
+                </ThemedView>
+              </ThemedView>
+            ))
+          )}
         </ThemedView>
       </ScrollView>
     </SafeAreaView>
@@ -344,6 +370,10 @@ const styles = StyleSheet.create({
   safeGreen: {
     borderColor: '#9ad3a6',
     backgroundColor: '#edf9ef',
+  },
+  infoNeutral: {
+    borderColor: '#d7deea',
+    backgroundColor: '#f8fbff',
   },
   alertBanner: {
     borderWidth: StyleSheet.hairlineWidth,
@@ -405,4 +435,55 @@ const styles = StyleSheet.create({
   },
   muted: { opacity: 0.7 },
   blockedTitle: { marginTop: 10 },
+  deviceRowCard: {
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#d0dae6',
+    borderRadius: 12,
+    backgroundColor: '#ffffff',
+    padding: 12,
+    gap: 6,
+  },
+  deviceRowTop: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  devicePowerBadge: {
+    color: '#17508d',
+    backgroundColor: '#e9f2ff',
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  deviceActions: {
+    flexDirection: 'row',
+    gap: 8,
+    marginTop: 4,
+  },
+  inlineEditButton: {
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#0a7ea4',
+    borderRadius: 8,
+    backgroundColor: '#eef8fd',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+  },
+  inlineEditButtonText: {
+    color: '#0a7ea4',
+    fontWeight: '600',
+  },
+  inlineDeleteButton: {
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#b1321f',
+    borderRadius: 8,
+    backgroundColor: '#ffe9e5',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+  },
+  inlineDeleteButtonText: {
+    color: '#b1321f',
+    fontWeight: '700',
+  },
 });
