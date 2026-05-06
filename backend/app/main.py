@@ -255,9 +255,12 @@ def latest_energy_data() -> dict:
 
 @app.post("/devices")
 def create_device(device: DeviceItem) -> dict:
+    print(f"[DEBUG] Incoming /devices payload: {device.model_dump()}")
     try:
         result = get_devices_collection().insert_one(device.model_dump())
+        print(f"[DEBUG] Device inserted into MongoDB, inserted_id={result.inserted_id}")
     except PyMongoError as exc:
+        print(f"[DEBUG] Device insert failed: {exc}")
         logger.exception("Failed to save device")
         raise HTTPException(status_code=500, detail="Failed to save device") from exc
     return {"status": "ok", "id": str(result.inserted_id)}

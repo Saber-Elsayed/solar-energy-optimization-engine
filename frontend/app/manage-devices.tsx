@@ -38,6 +38,15 @@ function hhmmToHourText(hhmm: string): string {
 }
 
 function hourTextToHHMM(hourText: string): string | null {
+  const timePattern = /^(\d{1,2}):([0-5]\d)$/;
+  const match = timePattern.exec(hourText.trim());
+  if (match) {
+    const hh = Number(match[1]);
+    const mm = Number(match[2]);
+    if (hh > 23) return null;
+    return `${hh.toString().padStart(2, '0')}:${mm.toString().padStart(2, '0')}`;
+  }
+
   const normalized = Number(hourText.replace(',', '.'));
   if (Number.isNaN(normalized)) return null;
   const totalMinutes = Math.round(normalized * 60);
@@ -126,17 +135,33 @@ export default function ManageDevicesScreen() {
   }, []);
 
   const submitDevice = async () => {
+    console.log('[ManageDevices] submit triggered', { name, power, duration, priority, essential, startHour, endHour });
     const parsedPower = Number(power.replace(',', '.'));
     const parsedDuration = hhmmToMinutes(duration);
     const parsedPriority = parseInt(priority, 10);
     const startHHMM = hourTextToHHMM(startHour);
     const endHHMM = hourTextToHHMM(endHour);
 
-    if (!name.trim()) return Alert.alert('Validation', 'Please enter Name.');
-    if (Number.isNaN(parsedPower) || parsedPower <= 0) return Alert.alert('Validation', 'Power (W) must be positive.');
-    if (parsedDuration === null || parsedDuration <= 0) return Alert.alert('Validation', 'Usage time must be in HH:MM format (example: 05:22).');
-    if (Number.isNaN(parsedPriority) || parsedPriority < 1 || parsedPriority > 5) return Alert.alert('Validation', 'Priority must be between 1 and 5.');
-    if (!startHHMM || !endHHMM) return Alert.alert('Validation', 'Start Hour and End Hour must be valid numeric hours.');
+    if (!name.trim()) {
+      console.warn('[ManageDevices] validation failed: name');
+      return Alert.alert('Validation', 'Please enter Name.');
+    }
+    if (Number.isNaN(parsedPower) || parsedPower <= 0) {
+      console.warn('[ManageDevices] validation failed: power', power);
+      return Alert.alert('Validation', 'Power (W) must be positive.');
+    }
+    if (parsedDuration === null || parsedDuration <= 0) {
+      console.warn('[ManageDevices] validation failed: duration', duration);
+      return Alert.alert('Validation', 'Usage time must be in HH:MM format (example: 05:22).');
+    }
+    if (Number.isNaN(parsedPriority) || parsedPriority < 1 || parsedPriority > 5) {
+      console.warn('[ManageDevices] validation failed: priority', priority);
+      return Alert.alert('Validation', 'Priority must be between 1 and 5.');
+    }
+    if (!startHHMM || !endHHMM) {
+      console.warn('[ManageDevices] validation failed: start/end', { startHour, endHour });
+      return Alert.alert('Validation', 'Start and End must be hour value (8 or 8.5) or HH:MM.');
+    }
 
     const payload: ApiDevicePayload = {
       name: name.trim(),
@@ -152,14 +177,19 @@ export default function ManageDevicesScreen() {
     const method = isEditing ? 'PUT' : 'POST';
 
     try {
+      console.log('[ManageDevices] sending request', { method, url, payload });
       const res = await fetch(url, {
         method,
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
       });
       if (!res.ok) {
-        throw new Error(`${method} failed (${res.status})`);
+        const errorText = await res.text();
+        console.error('[ManageDevices] request failed', { status: res.status, body: errorText });
+        throw new Error(`${method} failed (${res.status}): ${errorText}`);
       }
+      const bodyText = await res.text();
+      console.log('[ManageDevices] request success', { status: res.status, body: bodyText });
       await loadDevices();
       resetForm();
     } catch (err) {
@@ -199,7 +229,7 @@ export default function ManageDevicesScreen() {
       <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="always">
         <ThemedView style={styles.card}>
           <ThemedText type="subtitle">Add / Edit Product</ThemedText>
-          <ThemedText style={styles.note}>Time is entered as HOURS (example: 8, 13.5, 22).</ThemedText>
+          <ThemedText style={styles.note}>Usage Time format: HH:MM (example: 05:22).</ThemedText>
 
           <ThemedText style={styles.label}>Name</ThemedText>
           <TextInput style={styles.input} value={name} onChangeText={setName} autoCapitalize="words" />
