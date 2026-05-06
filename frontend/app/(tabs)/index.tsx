@@ -180,61 +180,50 @@ export default function HomeScreen() {
     void fetchWeather(item.name);
   };
 
-  const deleteDevice = async (deviceId: string) => {
-    const previous = devices;
-    setDevices((curr) => curr.filter((item) => item.id !== deviceId));
-    try {
-      const res = await fetch(`${DEVICES_URL}/${deviceId}`, { method: 'DELETE' });
-      if (!res.ok) {
-        throw new Error(`DELETE failed (${res.status})`);
-      }
-    } catch {
-      setDevices(previous);
-    }
-  };
-
   return (
     <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
       <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="always">
-        {alerts.length > 0 && (
-          <ThemedView style={styles.alertBanner}>
-            {alerts.map((alert, idx) => (
-              <ThemedText key={`alert-${idx}`} style={styles.alertText}>
-                {alert}
-              </ThemedText>
-            ))}
+        <ThemedView style={styles.topSection}>
+          {alerts.length > 0 && (
+            <ThemedView style={styles.alertBanner}>
+              {alerts.map((alert, idx) => (
+                <ThemedText key={`alert-${idx}`} style={styles.alertText}>
+                  {alert}
+                </ThemedText>
+              ))}
+            </ThemedView>
+          )}
+
+          <ThemedView style={[styles.card, styles.infoBlue, styles.sectionSpacing]}>
+            <ThemedText type="subtitle">Weather</ThemedText>
+            <ThemedText style={styles.label}>City</ThemedText>
+            <TextInput style={styles.input} value={city} onChangeText={setCity} autoCapitalize="words" />
+            {citySuggestions.length > 0 && (
+              <ThemedView style={styles.dropdown}>
+                {citySuggestions.map((item, idx) => (
+                  <Pressable key={`${item.name}-${item.country}-${idx}`} style={({ pressed }) => [styles.cityRow, pressed && styles.buttonPressed]} onPress={() => onSelectCity(item)}>
+                    <ThemedText>{item.name}</ThemedText>
+                    <ThemedText style={styles.muted}>{item.country}</ThemedText>
+                  </Pressable>
+                ))}
+              </ThemedView>
+            )}
+            {weatherLoading ? <ActivityIndicator size="small" color="#0a7ea4" /> : null}
+            {selectedCity && weather && (
+              <ThemedView style={styles.subCard}>
+                <ThemedText>City: {weather.city ?? selectedCity.name}</ThemedText>
+                <ThemedText>Temperature: {weather.temperature ?? 'N/A'}</ThemedText>
+                <ThemedText>Condition: {weather.condition ?? 'N/A'}</ThemedText>
+              </ThemedView>
+            )}
           </ThemedView>
-        )}
+        </ThemedView>
 
         <ThemedView style={styles.topHeaderCard}>
           <ThemedText type="title">Smart Energy Dashboard</ThemedText>
           <Pressable style={({ pressed }) => [styles.button, pressed && styles.buttonPressed]} onPress={() => router.push('/manage-devices')}>
             <Text style={styles.buttonText}>Manage Electrical Devices</Text>
           </Pressable>
-        </ThemedView>
-
-        <ThemedView style={[styles.card, styles.infoBlue]}>
-          <ThemedText type="subtitle">Weather</ThemedText>
-          <ThemedText style={styles.label}>City</ThemedText>
-          <TextInput style={styles.input} value={city} onChangeText={setCity} autoCapitalize="words" />
-          {citySuggestions.length > 0 && (
-            <ThemedView style={styles.dropdown}>
-              {citySuggestions.map((item, idx) => (
-                <Pressable key={`${item.name}-${item.country}-${idx}`} style={({ pressed }) => [styles.cityRow, pressed && styles.buttonPressed]} onPress={() => onSelectCity(item)}>
-                  <ThemedText>{item.name}</ThemedText>
-                  <ThemedText style={styles.muted}>{item.country}</ThemedText>
-                </Pressable>
-              ))}
-            </ThemedView>
-          )}
-          {weatherLoading ? <ActivityIndicator size="small" color="#0a7ea4" /> : null}
-          {selectedCity && weather && (
-            <ThemedView style={styles.subCard}>
-              <ThemedText>City: {weather.city ?? selectedCity.name}</ThemedText>
-              <ThemedText>Temperature: {weather.temperature ?? 'N/A'}</ThemedText>
-              <ThemedText>Condition: {weather.condition ?? 'N/A'}</ThemedText>
-            </ThemedView>
-          )}
         </ThemedView>
 
         <ThemedView style={styles.row}>
@@ -299,18 +288,6 @@ export default function HomeScreen() {
                 <ThemedText style={styles.muted}>
                   Priority {d.priority} · {d.essential ? 'mandatory' : 'optional'}
                 </ThemedText>
-                <ThemedView style={styles.deviceActions}>
-                  <Pressable
-                    style={({ pressed }) => [styles.inlineEditButton, pressed && styles.buttonPressed]}
-                    onPress={() => router.push('/manage-devices')}>
-                    <Text style={styles.inlineEditButtonText}>Edit</Text>
-                  </Pressable>
-                  <Pressable
-                    style={({ pressed }) => [styles.inlineDeleteButton, pressed && styles.buttonPressed]}
-                    onPress={() => void deleteDevice(d.id)}>
-                    <Text style={styles.inlineDeleteButtonText}>Delete</Text>
-                  </Pressable>
-                </ThemedView>
               </ThemedView>
             ))
           )}
@@ -326,8 +303,11 @@ const styles = StyleSheet.create({
   },
   container: {
     padding: 18,
-    gap: 14,
+    gap: 16,
     paddingBottom: 28,
+  },
+  topSection: {
+    marginBottom: 4,
   },
   topHeaderCard: {
     borderWidth: StyleSheet.hairlineWidth,
@@ -382,6 +362,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#ffe9e5',
     padding: 12,
     gap: 4,
+    marginBottom: 10,
   },
   alertText: {
     color: '#b1321f',
@@ -435,6 +416,9 @@ const styles = StyleSheet.create({
   },
   muted: { opacity: 0.7 },
   blockedTitle: { marginTop: 10 },
+  sectionSpacing: {
+    marginBottom: 8,
+  },
   deviceRowCard: {
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: '#d0dae6',
@@ -456,34 +440,5 @@ const styles = StyleSheet.create({
     paddingVertical: 4,
     fontSize: 12,
     fontWeight: '600',
-  },
-  deviceActions: {
-    flexDirection: 'row',
-    gap: 8,
-    marginTop: 4,
-  },
-  inlineEditButton: {
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#0a7ea4',
-    borderRadius: 8,
-    backgroundColor: '#eef8fd',
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-  },
-  inlineEditButtonText: {
-    color: '#0a7ea4',
-    fontWeight: '600',
-  },
-  inlineDeleteButton: {
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#b1321f',
-    borderRadius: 8,
-    backgroundColor: '#ffe9e5',
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-  },
-  inlineDeleteButtonText: {
-    color: '#b1321f',
-    fontWeight: '700',
   },
 });
