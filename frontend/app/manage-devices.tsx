@@ -47,6 +47,21 @@ function hourTextToHHMM(hourText: string): string | null {
   return `${hour.toString().padStart(2, '0')}:${minute.toString().padStart(2, '0')}`;
 }
 
+function minutesToHHMM(totalMinutes: number): string {
+  const safeMinutes = Math.max(0, Math.round(totalMinutes));
+  const hh = Math.floor(safeMinutes / 60);
+  const mm = safeMinutes % 60;
+  return `${hh.toString().padStart(2, '0')}:${mm.toString().padStart(2, '0')}`;
+}
+
+function hhmmToMinutes(hhmm: string): number | null {
+  const match = /^(\d{1,2}):([0-5]\d)$/.exec(hhmm.trim());
+  if (!match) return null;
+  const hh = Number(match[1]);
+  const mm = Number(match[2]);
+  return hh * 60 + mm;
+}
+
 function fromApiDevice(api: ApiDevice): DeviceRow {
   return {
     id: api.id,
@@ -67,7 +82,7 @@ export default function ManageDevicesScreen() {
 
   const [name, setName] = useState('');
   const [power, setPower] = useState('');
-  const [duration, setDuration] = useState('');
+  const [duration, setDuration] = useState('00:30');
   const [priority, setPriority] = useState('3');
   const [essential, setEssential] = useState(false);
   const [startHour, setStartHour] = useState('8');
@@ -77,7 +92,7 @@ export default function ManageDevicesScreen() {
   const resetForm = () => {
     setName('');
     setPower('');
-    setDuration('');
+    setDuration('00:30');
     setPriority('3');
     setEssential(false);
     setStartHour('8');
@@ -112,14 +127,14 @@ export default function ManageDevicesScreen() {
 
   const submitDevice = async () => {
     const parsedPower = Number(power.replace(',', '.'));
-    const parsedDuration = parseInt(duration, 10);
+    const parsedDuration = hhmmToMinutes(duration);
     const parsedPriority = parseInt(priority, 10);
     const startHHMM = hourTextToHHMM(startHour);
     const endHHMM = hourTextToHHMM(endHour);
 
     if (!name.trim()) return Alert.alert('Validation', 'Please enter Name.');
-    if (Number.isNaN(parsedPower) || parsedPower <= 0) return Alert.alert('Validation', 'Power must be positive.');
-    if (Number.isNaN(parsedDuration) || parsedDuration <= 0) return Alert.alert('Validation', 'Usage time must be positive minutes.');
+    if (Number.isNaN(parsedPower) || parsedPower <= 0) return Alert.alert('Validation', 'Power (W) must be positive.');
+    if (parsedDuration === null || parsedDuration <= 0) return Alert.alert('Validation', 'Usage time must be in HH:MM format (example: 05:22).');
     if (Number.isNaN(parsedPriority) || parsedPriority < 1 || parsedPriority > 5) return Alert.alert('Validation', 'Priority must be between 1 and 5.');
     if (!startHHMM || !endHHMM) return Alert.alert('Validation', 'Start Hour and End Hour must be valid numeric hours.');
 
@@ -157,7 +172,7 @@ export default function ManageDevicesScreen() {
     setEditingId(device.id);
     setName(device.name);
     setPower(String(device.power));
-    setDuration(String(device.duration));
+    setDuration(minutesToHHMM(device.duration));
     setPriority(String(device.priority));
     setEssential(device.essential);
     setStartHour(device.startTime);
@@ -189,11 +204,11 @@ export default function ManageDevicesScreen() {
           <ThemedText style={styles.label}>Name</ThemedText>
           <TextInput style={styles.input} value={name} onChangeText={setName} autoCapitalize="words" />
 
-          <ThemedText style={styles.label}>Power (kW)</ThemedText>
+          <ThemedText style={styles.label}>Power (W)</ThemedText>
           <TextInput style={styles.input} value={power} onChangeText={setPower} keyboardType="decimal-pad" />
 
-          <ThemedText style={styles.label}>Usage Time (minutes)</ThemedText>
-          <TextInput style={styles.input} value={duration} onChangeText={setDuration} keyboardType="number-pad" />
+          <ThemedText style={styles.label}>Usage Time (HH:MM)</ThemedText>
+          <TextInput style={styles.input} value={duration} onChangeText={setDuration} autoCapitalize="none" />
 
           <ThemedText style={styles.label}>Priority (1-5)</ThemedText>
           <TextInput style={styles.input} value={priority} onChangeText={setPriority} keyboardType="number-pad" />
@@ -230,7 +245,7 @@ export default function ManageDevicesScreen() {
               <ThemedView key={d.id} style={styles.deviceCard}>
                 <ThemedText type="defaultSemiBold">{d.name}</ThemedText>
                 <ThemedText>
-                  {d.power} kW • {d.duration} min • priority {d.priority}
+                  {d.power} W • {minutesToHHMM(d.duration)} • priority {d.priority}
                 </ThemedText>
                 <ThemedText>
                   {d.essential ? 'mandatory' : 'optional'} • {d.startTime}h - {d.endTime}h

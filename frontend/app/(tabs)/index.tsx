@@ -20,6 +20,7 @@ type ApiDevice = {
 type EnergyDataItem = {
   voltage?: number;
   current?: number;
+  soc?: number;
 };
 
 type OptimizeWeather = {
@@ -40,28 +41,40 @@ type DeviceDecision = {
 };
 
 const DEVICES_URL = Platform.OS === 'android' ? 'http://10.0.2.2:8000/devices' : 'http://127.0.0.1:8000/devices';
-const ENERGY_URL = Platform.OS === 'android' ? 'http://10.0.2.2:8000/energy-data' : 'http://127.0.0.1:8000/energy-data';
+const ENERGY_LATEST_URL = Platform.OS === 'android' ? 'http://10.0.2.2:8000/energy-data/latest' : 'http://127.0.0.1:8000/energy-data/latest';
 const CITIES_URL = Platform.OS === 'android' ? 'http://10.0.2.2:8000/cities' : 'http://127.0.0.1:8000/cities';
 const OPTIMIZE_URL = Platform.OS === 'android' ? 'http://10.0.2.2:8000/optimize' : 'http://127.0.0.1:8000/optimize';
 const RAPID_DISCHARGE_DROP = 1.5;
 const SAFE_VOLTAGE_THRESHOLD = 11.5;
 
-function optimizeDevices(devices: ApiDevice[], availablePowerKw: number) {
-  let remaining = availablePowerKw;
+function optimizeDevices(
+  devices: ApiDevice[],
+  availablePowerW: number,
+  availableEnergyWh: number,
+) {
+  let remainingEnergyWh = availableEnergyWh;
   const ordered = [...devices].sort((a, b) => Number(b.essential) - Number(a.essential) || b.priority - a.priority);
   const allowed: DeviceDecision[] = [];
   const blocked: DeviceDecision[] = [];
 
   for (const device of ordered) {
-    if (device.power <= remaining) {
+    const usageHours = device.duration / 60;
+    const requiredEnergyWh = device.power * usageHours;
+
+    if (availablePowerW > 0 && device.power > availablePowerW) {
+      blocked.push({ device, reason: 'Power exceeds current supply' });
+      continue;
+    }
+
+    if (requiredEnergyWh <= remainingEnergyWh) {
       allowed.push({ device });
-      remaining -= device.power;
+      remainingEnergyWh -= requiredEnergyWh;
     } else {
-      blocked.push({ device, reason: 'Insufficient available power' });
+      blocked.push({ device, reason: 'Insufficient battery energy' });
     }
   }
 
-  return { allowed, blocked };
+  return { allowed, blocked, remainingEnergyWh };
 }
 
 export default function HomeScreen() {
@@ -82,21 +95,30 @@ export default function HomeScreen() {
 
   const voltage = typeof battery?.voltage === 'number' ? battery.voltage : 0;
   const current = typeof battery?.current === 'number' ? battery.current : 0;
-  const powerKw = useMemo(() => (voltage * current) / 1000, [voltage, current]);
-  const capacityKw = useMemo(() => {
+  const soc = typeof battery?.soc === 'number' ? battery.soc : null;
+  const powerW = useMemo(() => voltage * current, [voltage, current]);
+  const batteryCapacityWhValue = useMemo(() => {
     const parsed = Number(batteryCapacityWh.replace(',', '.'));
     if (Number.isNaN(parsed) || parsed <= 0) return 0;
-    return parsed / 1000;
+    return parsed;
   }, [batteryCapacityWh]);
-  // Drive switching from live measured power first; use capacity only as fallback.
-  const optimizationBudgetKw = useMemo(() => {
-    if (powerKw > 0) return powerKw;
-    return capacityKw;
-  }, [powerKw, capacityKw]);
-  const optimization = useMemo(() => optimizeDevices(devices, optimizationBudgetKw), [devices, optimizationBudgetKw]);
+  const availableEnergyWh = useMemo(() => {
+    if (soc !== null) {
+      return batteryCapacityWhValue * (soc / 100);
+    }
+    return batteryCapacityWhValue;
+  }, [batteryCapacityWhValue, soc]);
+  const optimization = useMemo(
+    () => optimizeDevices(devices, powerW, availableEnergyWh),
+    [devices, powerW, availableEnergyWh],
+  );
 
-  const evaluateAlerts = (latestVoltage: number | undefined) => {
+  const evaluateAlerts = (latestVoltage: number | undefined, latestSoc: number | undefined) => {
     const dynamicAlerts: string[] = [];
+    const socValue = typeof latestSoc === 'number' ? latestSoc : null;
+    const totalRequestedW = devices.reduce((sum, d) => sum + d.power, 0);
+    const nextHourUsageWh = devices.reduce((sum, d) => sum + d.power * Math.min(d.duration, 60) / 60, 0);
+
     if (typeof latestVoltage === 'number') {
       if (previousVoltage.current !== null && previousVoltage.current - latestVoltage >= RAPID_DISCHARGE_DROP) {
         dynamicAlerts.push('⚠️ Rapid battery discharge detected');
@@ -106,21 +128,32 @@ export default function HomeScreen() {
       }
       previousVoltage.current = latestVoltage;
     }
+    if (socValue !== null && socValue < 25) {
+      dynamicAlerts.push('⚠️ Low battery level');
+    }
+    if (socValue !== null && socValue < 35 && powerW > 0 && totalRequestedW > powerW) {
+      dynamicAlerts.push('⚠️ High usage may drain battery soon');
+    }
+    if (socValue !== null && availableEnergyWh > 0 && nextHourUsageWh > availableEnergyWh) {
+      dynamicAlerts.push('⚠️ Risk of battery depletion');
+    }
     setAlerts(dynamicAlerts);
   };
 
   const fetchDashboardData = async () => {
     try {
-      const [devicesRes, energyRes] = await Promise.all([fetch(DEVICES_URL), fetch(ENERGY_URL)]);
+      const [devicesRes, energyRes] = await Promise.all([
+        fetch(`${DEVICES_URL}?t=${Date.now()}`),
+        fetch(`${ENERGY_LATEST_URL}?t=${Date.now()}`),
+      ]);
       if (devicesRes.ok) {
         const devicesData = (await devicesRes.json()) as ApiDevice[];
         if (Array.isArray(devicesData)) setDevices(devicesData);
       }
       if (energyRes.ok) {
-        const energyData = (await energyRes.json()) as EnergyDataItem[];
-        const latest = Array.isArray(energyData) && energyData.length > 0 ? energyData[energyData.length - 1] : null;
+        const latest = (await energyRes.json()) as EnergyDataItem;
         setBattery(latest);
-        evaluateAlerts(latest?.voltage);
+        evaluateAlerts(latest?.voltage, latest?.soc);
       }
     } finally {
       setLoading(false);
@@ -233,9 +266,13 @@ export default function HomeScreen() {
               <ActivityIndicator size="small" color="#0a7ea4" />
             ) : (
               <>
-                <ThemedText>Voltage: {battery?.voltage ?? 'N/A'} V</ThemedText>
-                <ThemedText>Current: {battery?.current ?? 'N/A'} A</ThemedText>
-                <ThemedText>Power: {powerKw.toFixed(2)} kW</ThemedText>
+                <ThemedText>Voltage: {battery?.voltage !== undefined ? String(battery.voltage) : 'N/A'}</ThemedText>
+                <ThemedText>Current: {battery?.current !== undefined ? String(battery.current) : 'N/A'}</ThemedText>
+                <ThemedText>SOC: {battery?.soc !== undefined ? `${String(battery.soc)}%` : 'N/A'}</ThemedText>
+                <ThemedText style={styles.socText}>Calculated power: {String(powerW)} W</ThemedText>
+                <ThemedView style={styles.socBarTrack}>
+                  <ThemedView style={[styles.socBarFill, { width: `${Math.max(0, Math.min(100, soc ?? 0))}%` }]} />
+                </ThemedView>
               </>
             )}
             <ThemedText style={styles.label}>Battery Capacity (Wh)</ThemedText>
@@ -245,7 +282,7 @@ export default function HomeScreen() {
               onChangeText={setBatteryCapacityWh}
               keyboardType="decimal-pad"
             />
-            <ThemedText style={styles.muted}>Optimization budget: {optimizationBudgetKw.toFixed(2)} kW</ThemedText>
+            <ThemedText style={styles.muted}>Available energy: {availableEnergyWh.toFixed(1)} Wh</ThemedText>
           </ThemedView>
 
           <ThemedView style={[styles.card, styles.safeGreen]}>
@@ -283,10 +320,10 @@ export default function HomeScreen() {
               <ThemedView key={d.id} style={styles.deviceRowCard}>
                 <ThemedView style={styles.deviceRowTop}>
                   <ThemedText type="defaultSemiBold">{d.name}</ThemedText>
-                  <ThemedText style={styles.devicePowerBadge}>{d.power} kW</ThemedText>
+                  <ThemedText style={styles.devicePowerBadge}>{d.power} W</ThemedText>
                 </ThemedView>
                 <ThemedText style={styles.muted}>
-                  Priority {d.priority} · {d.essential ? 'mandatory' : 'optional'}
+                  Priority {d.priority} · {d.essential ? 'mandatory' : 'optional'} · {d.duration} min
                 </ThemedText>
               </ThemedView>
             ))
@@ -416,6 +453,19 @@ const styles = StyleSheet.create({
   },
   muted: { opacity: 0.7 },
   blockedTitle: { marginTop: 10 },
+  socText: { fontWeight: '700', color: '#1b4b7a' },
+  socBarTrack: {
+    height: 8,
+    borderRadius: 999,
+    backgroundColor: '#dbe8f7',
+    overflow: 'hidden',
+    marginTop: 2,
+    marginBottom: 2,
+  },
+  socBarFill: {
+    height: '100%',
+    backgroundColor: '#1f7a34',
+  },
   sectionSpacing: {
     marginBottom: 8,
   },

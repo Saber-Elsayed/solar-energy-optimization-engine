@@ -164,6 +164,7 @@ class CitySuggestion(BaseModel):
 class EnergyDataRequest(BaseModel):
     voltage: float
     current: float
+    soc: float | None = Field(default=None, ge=0, le=100)
     model_config = ConfigDict(extra="ignore")
 
 
@@ -235,6 +236,21 @@ def list_energy_data() -> List[dict]:
         raise HTTPException(status_code=500, detail="Failed to fetch energy data") from exc
     print(f"[DEBUG] Energy records retrieved from MongoDB: {records}")
     return records
+
+
+@app.get("/energy-data/latest")
+def latest_energy_data() -> dict:
+    """Return the latest controller payload as stored, without value transformation."""
+    try:
+        latest = get_energy_collection().find_one({}, {"_id": 0}, sort=[("timestamp", -1)])
+    except PyMongoError as exc:
+        logger.exception("Failed to load latest energy data")
+        raise HTTPException(status_code=500, detail="Failed to fetch latest energy data") from exc
+
+    if latest is None:
+        raise HTTPException(status_code=404, detail="No energy data found")
+
+    return latest
 
 
 @app.post("/devices")
