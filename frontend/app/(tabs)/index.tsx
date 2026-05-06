@@ -281,21 +281,20 @@ export default function HomeScreen() {
               <>
                 <ThemedText>Voltage: {battery?.voltage !== undefined ? String(battery.voltage) : 'N/A'}</ThemedText>
                 <ThemedText>Current: {battery?.current !== undefined ? String(battery.current) : 'N/A'}</ThemedText>
-                <ThemedText>Power: {String(powerW)} W</ThemedText>
                 <ThemedText style={styles.socText}>SOC: {battery?.soc !== undefined ? `${String(battery.soc)}%` : 'N/A'}</ThemedText>
                 <ThemedView style={styles.socBarTrack}>
                   <ThemedView style={[styles.socBarFill, { width: `${Math.max(0, Math.min(100, soc ?? 0))}%` }]} />
                 </ThemedView>
               </>
             )}
-            <ThemedText style={styles.label}>Battery Capacity (Wh)</ThemedText>
+            <ThemedText style={styles.label}>Battery Capacity</ThemedText>
             <TextInput
               style={styles.input}
               value={batteryCapacityWh}
               onChangeText={setBatteryCapacityWh}
               keyboardType="decimal-pad"
             />
-            <ThemedText style={styles.muted}>Available energy: {availableEnergyWh.toFixed(1)} Wh</ThemedText>
+            <ThemedText style={styles.muted}>Available Energy: {availableEnergyWh.toFixed(1)}</ThemedText>
           </ThemedView>
 
           <ThemedView style={[styles.card, styles.safeGreen]}>
