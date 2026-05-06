@@ -5,13 +5,19 @@ This module creates the ASGI application object that Uvicorn runs
 """
 
 import json
+import logging
+import os
+from datetime import datetime, timezone
 from typing import List
 from urllib.parse import quote
 from urllib.request import urlopen
 
-from fastapi import FastAPI
+from bson import ObjectId
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
+from pymongo import MongoClient
+from pymongo.errors import PyMongoError
 
 # Instantiate the FastAPI application. This registers the app with Starlette/FastAPI
 # and enables automatic OpenAPI schema generation at /docs and /redoc.
@@ -19,6 +25,35 @@ app = FastAPI(
     title="Solar Energy Optimization Engine",
     version="0.1.0",
 )
+logger = logging.getLogger(__name__)
+MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017")
+mongo_client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=3000)
+energy_collection = mongo_client["energy_db"]["energy"]
+devices_collection = mongo_client["energy_db"]["devices"]
+
+
+def get_energy_collection():
+    """Return a healthy MongoDB energy collection handle."""
+    global mongo_client, energy_collection
+    try:
+        mongo_client.admin.command("ping")
+    except PyMongoError:
+        mongo_client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=3000)
+        energy_collection = mongo_client["energy_db"]["energy"]
+        mongo_client.admin.command("ping")
+    return energy_collection
+
+
+def get_devices_collection():
+    """Return a healthy MongoDB devices collection handle."""
+    global mongo_client, devices_collection
+    try:
+        mongo_client.admin.command("ping")
+    except PyMongoError:
+        mongo_client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=3000)
+        devices_collection = mongo_client["energy_db"]["devices"]
+        mongo_client.admin.command("ping")
+    return devices_collection
 
 # Expo Web (and other browsers) block cross-origin fetch unless the API sends CORS headers.
 app.add_middleware(
@@ -116,6 +151,7 @@ class WeatherInfo(BaseModel):
     city: str
     condition: str
     energy_estimate: float = Field(..., ge=0)
+    temperature: float | None = None
 
 
 class CitySuggestion(BaseModel):
@@ -123,6 +159,12 @@ class CitySuggestion(BaseModel):
 
     name: str
     country: str
+
+
+class EnergyDataRequest(BaseModel):
+    voltage: float
+    current: float
+    model_config = ConfigDict(extra="ignore")
 
 
 @app.get("/")
@@ -165,6 +207,119 @@ def search_cities(query: str) -> List[CitySuggestion]:
             continue
         suggestions.append(CitySuggestion(name=name, country=country_code))
     return suggestions
+
+
+@app.post("/energy-data")
+async def receive_energy_data(request: Request, payload: EnergyDataRequest):
+    raw_payload = await request.json()
+    print(f"[DEBUG] Raw incoming /energy-data JSON: {raw_payload}")
+    document = {
+        **payload.model_dump(),
+        "timestamp": datetime.now(timezone.utc),
+    }
+    print(f"[DEBUG] Document to save in MongoDB: {document}")
+    try:
+        result = get_energy_collection().insert_one(document)
+    except PyMongoError as exc:
+        logger.exception("Failed to save energy data")
+        raise HTTPException(status_code=500, detail="Failed to save energy data") from exc
+    return {"status": "ok", "id": str(result.inserted_id)}
+
+
+@app.get("/energy-data")
+def list_energy_data() -> List[dict]:
+    try:
+        records = list(get_energy_collection().find({}, {"_id": 0}))
+    except PyMongoError as exc:
+        logger.exception("Failed to load energy data")
+        raise HTTPException(status_code=500, detail="Failed to fetch energy data") from exc
+    print(f"[DEBUG] Energy records retrieved from MongoDB: {records}")
+    return records
+
+
+@app.post("/devices")
+def create_device(device: DeviceItem) -> dict:
+    try:
+        result = get_devices_collection().insert_one(device.model_dump())
+    except PyMongoError as exc:
+        logger.exception("Failed to save device")
+        raise HTTPException(status_code=500, detail="Failed to save device") from exc
+    return {"status": "ok", "id": str(result.inserted_id)}
+
+
+@app.get("/devices")
+def list_devices() -> List[dict]:
+    try:
+        records = list(
+            get_devices_collection().find(
+                {},
+                {
+                    "_id": 1,
+                    "name": 1,
+                    "power": 1,
+                    "duration": 1,
+                    "priority": 1,
+                    "essential": 1,
+                    "start_time": 1,
+                    "end_time": 1,
+                },
+            )
+        )
+    except PyMongoError as exc:
+        logger.exception("Failed to fetch devices")
+        raise HTTPException(status_code=500, detail="Failed to fetch devices") from exc
+
+    return [
+        {
+            "id": str(rec["_id"]),
+            "name": rec["name"],
+            "power": rec["power"],
+            "duration": rec["duration"],
+            "priority": rec["priority"],
+            "essential": rec["essential"],
+            "start_time": rec["start_time"],
+            "end_time": rec["end_time"],
+        }
+        for rec in records
+    ]
+
+
+@app.put("/devices/{device_id}")
+def update_device(device_id: str, device: DeviceItem) -> dict:
+    try:
+        obj_id = ObjectId(device_id)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="Invalid device id") from exc
+
+    try:
+        result = get_devices_collection().update_one({"_id": obj_id}, {"$set": device.model_dump()})
+    except PyMongoError as exc:
+        logger.exception("Failed to update device")
+        raise HTTPException(status_code=500, detail="Failed to update device") from exc
+
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Device not found")
+
+    return {"status": "ok", "id": device_id}
+
+
+@app.delete("/devices/{device_id}")
+def delete_device(device_id: str) -> dict:
+    try:
+        obj_id = ObjectId(device_id)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="Invalid device id") from exc
+
+    try:
+        result = get_devices_collection().delete_one({"_id": obj_id})
+    except PyMongoError as exc:
+        logger.exception("Failed to delete device")
+        raise HTTPException(status_code=500, detail="Failed to delete device") from exc
+
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Device not found")
+
+    return {"status": "ok", "id": device_id}
 
 
 def _hhmm_to_minutes(hhmm: str) -> int:
@@ -256,7 +411,7 @@ def _fetch_weather_and_forecast(city: str) -> tuple[WeatherInfo, List[ForecastPo
     forecast_url = (
         "https://api.open-meteo.com/v1/forecast"
         f"?latitude={latitude}&longitude={longitude}"
-        "&current=cloud_cover"
+        "&current=cloud_cover,temperature_2m"
         "&hourly=cloud_cover"
         "&forecast_days=1"
         "&timezone=auto"
@@ -266,6 +421,7 @@ def _fetch_weather_and_forecast(city: str) -> tuple[WeatherInfo, List[ForecastPo
 
     current = weather_payload.get("current", {})
     current_cloud_cover = float(current.get("cloud_cover", 50))
+    temperature = current.get("temperature_2m")
     condition = _cloud_to_condition(current_cloud_cover)
     energy_estimate = _cloud_to_energy(current_cloud_cover)
 
@@ -289,6 +445,7 @@ def _fetch_weather_and_forecast(city: str) -> tuple[WeatherInfo, List[ForecastPo
         city=resolved_city,
         condition=condition,
         energy_estimate=energy_estimate,
+        temperature=float(temperature) if temperature is not None else None,
     )
     return weather_info, forecast_points
 
@@ -397,6 +554,7 @@ def optimize(body: OptimizeRequest) -> MultiScenarioResponse:
             city=body.city,
             condition="Unavailable",
             energy_estimate=3.0,
+            temperature=None,
         )
         available_energy = weather_info.energy_estimate
         current_time_hhmm = fallback_time
