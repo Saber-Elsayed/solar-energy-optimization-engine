@@ -28,6 +28,8 @@ export type ApiDevicePayload = {
   end_time: string;
 };
 
+export type ApiDevice = ApiDevicePayload & { id: string };
+
 /** Full shape returned by the updated backend /optimize response. */
 export type CannotRunItem = {
   device: ApiDevicePayload;
@@ -72,6 +74,10 @@ const CITIES_URL =
   Platform.OS === 'android'
     ? 'http://10.0.2.2:8000/cities'
     : 'http://127.0.0.1:8000/cities';
+const DEVICES_URL =
+  Platform.OS === 'android'
+    ? 'http://10.0.2.2:8000/devices'
+    : 'http://127.0.0.1:8000/devices';
 
 type CitySuggestion = {
   name: string;
@@ -102,6 +108,19 @@ function toApiDevice(row: DeviceRow): ApiDevicePayload {
   };
 }
 
+function fromApiDevice(api: ApiDevice): DeviceRow {
+  return {
+    id: api.id,
+    name: api.name,
+    power_kw: api.power,
+    duration_minutes: api.duration,
+    priority: api.priority,
+    mandatory: api.essential,
+    start_time: api.start_time,
+    end_time: api.end_time,
+  };
+}
+
 /** One line per API device — used under Active / Rejected lists. */
 function ApiDeviceRow({ device, index }: { device: ApiDevicePayload; index: number }) {
   return (
@@ -124,6 +143,11 @@ export default function DeviceOptimizerScreen() {
   // --- State -----------------------------------------------------------------
   // `devices`: list of devices the user has added (shown below the form).
   const [devices, setDevices] = useState<DeviceRow[]>([]);
+  const [devicesLoading, setDevicesLoading] = useState(false);
+
+  // Editing state: when set, the form becomes an "update device" form.
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const isEditing = editingId !== null;
 
   // Form fields: separate state per input so each keystroke/toggle re-renders correctly.
   // Numbers are kept as strings while typing; we parse them when adding a device.
@@ -143,10 +167,80 @@ export default function DeviceOptimizerScreen() {
   // Keep API result in state (multiple named optimization scenarios).
   const [scenarios, setScenarios] = useState<OptimizeApiResponse | null>(null);
 
+  const resetDeviceForm = () => {
+    setName('');
+    setPowerKw('');
+    setDurationMinutes('');
+    setPriority('3');
+    setMandatory(false);
+    setStartTime('08:00');
+    setEndTime('18:00');
+  };
+
+  const startEdit = (row: DeviceRow) => {
+    setEditingId(row.id);
+    setName(row.name);
+    setPowerKw(String(row.power_kw));
+    setDurationMinutes(String(row.duration_minutes));
+    setPriority(String(row.priority));
+    setMandatory(row.mandatory);
+    setStartTime(row.start_time);
+    setEndTime(row.end_time);
+  };
+
+  const cancelEdit = () => {
+    setEditingId(null);
+    resetDeviceForm();
+  };
+
+  const fetchDevices = async () => {
+    try {
+      setDevicesLoading(true);
+      const response = await fetch(DEVICES_URL);
+      if (!response.ok) {
+        const raw = await response.text();
+        throw new Error(`GET /devices failed (${response.status}): ${raw.slice(0, 300)}`);
+      }
+      const data: unknown = await response.json();
+      if (!Array.isArray(data)) {
+        throw new Error('GET /devices returned invalid format');
+      }
+
+      const rows: DeviceRow[] = (data as ApiDevice[])
+        .filter(
+          (d): d is ApiDevice =>
+            typeof d === 'object' &&
+            d !== null &&
+            'id' in d &&
+            'name' in d &&
+            'power' in d &&
+            'duration' in d &&
+            'priority' in d &&
+            'essential' in d &&
+            'start_time' in d &&
+            'end_time' in d,
+        )
+        .map(fromApiDevice);
+
+      setDevices(rows);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unable to load devices';
+      Alert.alert('Load devices failed', message);
+    } finally {
+      setDevicesLoading(false);
+    }
+  };
+
   // Debug: confirm list updates in Metro / Xcode logs (helps when UI “looks” stuck).
   useEffect(() => {
     console.log('[Devices] current devices array', devices);
   }, [devices]);
+
+  // Page load: fetch devices from MongoDB-backed backend.
+  useEffect(() => {
+    void fetchDevices();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // City autocomplete with debounce:
   // - Wait briefly after typing before calling /cities.
@@ -199,7 +293,7 @@ export default function DeviceOptimizerScreen() {
 
   // --- Adding a device -------------------------------------------------------
   // Validates, appends to `devices`, then resets the form so the user can enter another.
-  const handleAddDevice = () => {
+  const handleSubmitDevice = async () => {
     const trimmedName = name.trim();
     // Normalize locale decimals (e.g. "7,2" → "7.2") so parseFloat is reliable.
     const power = parseFloat(powerKw.replace(',', '.'));
@@ -231,28 +325,40 @@ export default function DeviceOptimizerScreen() {
       return;
     }
 
-    const newDevice: DeviceRow = {
-      id: `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+    const payload: ApiDevicePayload = {
       name: trimmedName,
-      power_kw: power,
-      duration_minutes: duration,
+      power,
+      duration,
       priority: prio,
-      mandatory,
+      essential: mandatory,
       start_time: startTime,
       end_time: endTime,
     };
 
-    console.log('[AddDevice] adding device', newDevice);
-    setDevices((prev) => [...prev, newDevice]);
+    try {
+      const url = isEditing ? `${DEVICES_URL}/${editingId}` : DEVICES_URL;
+      const method = isEditing ? 'PUT' : 'POST';
 
-    // Clear inputs after a successful add (fresh row for the next device).
-    setName('');
-    setPowerKw('');
-    setDurationMinutes('');
-    setPriority('3');
-    setMandatory(false);
-    setStartTime('08:00');
-    setEndTime('18:00');
+      const response = await fetch(url, {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+
+      if (!response.ok) {
+        const raw = await response.text();
+        throw new Error(
+          `${method} ${url} failed (${response.status}): ${raw.slice(0, 300)}`,
+        );
+      }
+
+      await fetchDevices();
+      cancelEdit();
+      resetDeviceForm();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unable to save device';
+      Alert.alert('Save device failed', message);
+    }
   };
 
   /**
@@ -502,9 +608,20 @@ export default function DeviceOptimizerScreen() {
             accessibilityRole="button"
             android_ripple={{ color: 'rgba(255,255,255,0.3)' }}
             style={({ pressed }) => [styles.button, pressed && styles.buttonPressed]}
-            onPress={handleAddDevice}>
-            <Text style={styles.buttonText}>Add Device</Text>
+            onPress={() => {
+              void handleSubmitDevice();
+            }}>
+            <Text style={styles.buttonText}>{isEditing ? 'Save Changes' : 'Add Device'}</Text>
           </Pressable>
+
+          {isEditing && (
+            <Pressable
+              accessibilityRole="button"
+              style={({ pressed }) => [styles.buttonSecondary, pressed && styles.buttonPressed]}
+              onPress={cancelEdit}>
+              <Text style={styles.buttonSecondaryText}>Cancel Edit</Text>
+            </Pressable>
+          )}
 
           <Pressable
             accessibilityRole="button"
@@ -518,7 +635,12 @@ export default function DeviceOptimizerScreen() {
 
         <ThemedView style={styles.section}>
           <ThemedText type="subtitle">Device list ({devices.length})</ThemedText>
-          {devices.length === 0 ? (
+          {devicesLoading ? (
+            <ThemedView style={{ marginTop: 8 }}>
+              <ActivityIndicator size="small" color="#0a7ea4" />
+              <ThemedText style={styles.empty}>Loading devices...</ThemedText>
+            </ThemedView>
+          ) : devices.length === 0 ? (
             <ThemedText style={styles.empty}>No devices yet. Add one above.</ThemedText>
           ) : (
             devices.map((d) => (
@@ -530,6 +652,13 @@ export default function DeviceOptimizerScreen() {
                   {d.duration_minutes} min · priority {d.priority} ·{' '}
                   {d.mandatory ? 'mandatory' : 'optional'} · {d.start_time}-{d.end_time}
                 </ThemedText>
+
+                <Pressable
+                  accessibilityRole="button"
+                  onPress={() => startEdit(d)}
+                  style={({ pressed }) => [styles.editButton, pressed && styles.buttonPressed]}>
+                  <Text style={styles.editButtonText}>Edit</Text>
+                </Pressable>
               </ThemedView>
             ))
           )}
@@ -741,6 +870,20 @@ const styles = StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: '#ddd',
     gap: 4,
+  },
+  editButton: {
+    marginTop: 8,
+    alignItems: 'flex-end',
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderRadius: 8,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#0a7ea4',
+  },
+  editButtonText: {
+    color: '#0a7ea4',
+    fontSize: 14,
+    fontWeight: '600',
   },
   scenarioCard: {
     marginTop: 14,

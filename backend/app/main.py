@@ -17,6 +17,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, ConfigDict, Field
 from pymongo import MongoClient
 from pymongo.errors import PyMongoError
+from bson import ObjectId
 
 # Instantiate the FastAPI application. This registers the app with Starlette/FastAPI
 # and enables automatic OpenAPI schema generation at /docs and /redoc.
@@ -29,6 +30,7 @@ logger = logging.getLogger(__name__)
 MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017")
 mongo_client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=3000)
 energy_collection = mongo_client["energy_db"]["energy"]
+devices_collection = mongo_client["energy_db"]["devices"]
 
 
 def get_energy_collection():
@@ -42,6 +44,19 @@ def get_energy_collection():
         energy_collection = mongo_client["energy_db"]["energy"]
         mongo_client.admin.command("ping")
     return energy_collection
+
+
+def get_devices_collection():
+    """Return a healthy MongoDB collection handle, reconnecting if needed."""
+    global mongo_client, devices_collection
+    try:
+        mongo_client.admin.command("ping")
+    except PyMongoError:
+        print("[DEBUG] MongoDB ping failed, reconnecting...")
+        mongo_client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=3000)
+        devices_collection = mongo_client["energy_db"]["devices"]
+        mongo_client.admin.command("ping")
+    return devices_collection
 
 # Expo Web (and other browsers) block cross-origin fetch unless the API sends CORS headers.
 app.add_middleware(
@@ -233,8 +248,87 @@ def list_energy_data() -> List[dict[str, Any]]:
         logger.exception("Failed to fetch energy data from MongoDB")
         raise HTTPException(status_code=500, detail="Failed to fetch energy data") from exc
 
+    print(f"[DEBUG] Energy records retrieved from MongoDB: {records}")
     print(f"[DEBUG] Returning {len(records)} energy records from MongoDB")
     return records
+
+
+@app.post("/devices")
+def create_device(device: DeviceItem) -> dict[str, Any]:
+    """Create a saved electrical device (product) in MongoDB."""
+    collection = get_devices_collection()
+    document = device.model_dump()
+    try:
+        result = collection.insert_one(document)
+    except PyMongoError as exc:
+        logger.exception("Failed to save device to MongoDB")
+        raise HTTPException(status_code=500, detail="Failed to save device") from exc
+
+    return {"status": "ok", "id": str(result.inserted_id)}
+
+
+@app.get("/devices")
+def list_devices() -> List[dict[str, Any]]:
+    """Return all saved electrical devices, including API-friendly `id`."""
+    collection = get_devices_collection()
+    try:
+        records = list(
+            collection.find(
+                {},
+                {
+                    "_id": 1,
+                    "name": 1,
+                    "power": 1,
+                    "duration": 1,
+                    "priority": 1,
+                    "essential": 1,
+                    "start_time": 1,
+                    "end_time": 1,
+                },
+            )
+        )
+    except PyMongoError as exc:
+        logger.exception("Failed to fetch devices from MongoDB")
+        raise HTTPException(status_code=500, detail="Failed to fetch devices") from exc
+
+    # Convert MongoDB ObjectIds into string ids for the frontend.
+    devices: List[dict[str, Any]] = []
+    for rec in records:
+        devices.append(
+            {
+                "id": str(rec["_id"]),
+                "name": rec["name"],
+                "power": rec["power"],
+                "duration": rec["duration"],
+                "priority": rec["priority"],
+                "essential": rec["essential"],
+                "start_time": rec["start_time"],
+                "end_time": rec["end_time"],
+            }
+        )
+    return devices
+
+
+@app.put("/devices/{device_id}")
+def update_device(device_id: str, device: DeviceItem) -> dict[str, Any]:
+    """Update an existing saved electrical device by MongoDB id."""
+    try:
+        obj_id = ObjectId(device_id)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="Invalid device id") from exc
+
+    collection = get_devices_collection()
+    document = device.model_dump()
+    try:
+        result = collection.update_one({"_id": obj_id}, {"$set": document})
+    except PyMongoError as exc:
+        logger.exception("Failed to update device in MongoDB")
+        raise HTTPException(status_code=500, detail="Failed to update device") from exc
+
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Device not found")
+
+    return {"status": "ok", "id": device_id}
 
 
 def _hhmm_to_minutes(hhmm: str) -> int:
