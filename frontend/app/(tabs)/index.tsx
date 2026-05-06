@@ -113,7 +113,12 @@ export default function HomeScreen() {
     [devices, powerW, availableEnergyWh],
   );
 
-  const evaluateAlerts = (latestVoltage: number | undefined, latestSoc: number | undefined) => {
+  const evaluateAlerts = (
+    latestVoltage: number | undefined,
+    latestSoc: number | undefined,
+    latestPowerW: number,
+    latestAvailableEnergyWh: number,
+  ) => {
     const dynamicAlerts: string[] = [];
     const socValue = typeof latestSoc === 'number' ? latestSoc : null;
     const totalRequestedW = devices.reduce((sum, d) => sum + d.power, 0);
@@ -131,10 +136,10 @@ export default function HomeScreen() {
     if (socValue !== null && socValue < 25) {
       dynamicAlerts.push('⚠️ Low battery level');
     }
-    if (socValue !== null && socValue < 35 && powerW > 0 && totalRequestedW > powerW) {
+    if (socValue !== null && socValue < 35 && latestPowerW > 0 && totalRequestedW > latestPowerW) {
       dynamicAlerts.push('⚠️ High usage may drain battery soon');
     }
-    if (socValue !== null && availableEnergyWh > 0 && nextHourUsageWh > availableEnergyWh) {
+    if (socValue !== null && latestAvailableEnergyWh > 0 && nextHourUsageWh > latestAvailableEnergyWh) {
       dynamicAlerts.push('⚠️ Risk of battery depletion');
     }
     setAlerts(dynamicAlerts);
@@ -152,8 +157,16 @@ export default function HomeScreen() {
       }
       if (energyRes.ok) {
         const latest = (await energyRes.json()) as EnergyDataItem;
+        const latestVoltage = typeof latest?.voltage === 'number' ? latest.voltage : 0;
+        const latestCurrent = typeof latest?.current === 'number' ? latest.current : 0;
+        const latestSoc = typeof latest?.soc === 'number' ? latest.soc : undefined;
+        const latestPowerW = latestVoltage * latestCurrent;
+        const latestAvailableEnergyWh =
+          typeof latestSoc === 'number'
+            ? batteryCapacityWhValue * (latestSoc / 100)
+            : batteryCapacityWhValue;
         setBattery(latest);
-        evaluateAlerts(latest?.voltage, latest?.soc);
+        evaluateAlerts(latest?.voltage, latest?.soc, latestPowerW, latestAvailableEnergyWh);
       }
     } finally {
       setLoading(false);
@@ -268,8 +281,8 @@ export default function HomeScreen() {
               <>
                 <ThemedText>Voltage: {battery?.voltage !== undefined ? String(battery.voltage) : 'N/A'}</ThemedText>
                 <ThemedText>Current: {battery?.current !== undefined ? String(battery.current) : 'N/A'}</ThemedText>
-                <ThemedText>SOC: {battery?.soc !== undefined ? `${String(battery.soc)}%` : 'N/A'}</ThemedText>
-                <ThemedText style={styles.socText}>Calculated power: {String(powerW)} W</ThemedText>
+                <ThemedText>Power: {String(powerW)} W</ThemedText>
+                <ThemedText style={styles.socText}>SOC: {battery?.soc !== undefined ? `${String(battery.soc)}%` : 'N/A'}</ThemedText>
                 <ThemedView style={styles.socBarTrack}>
                   <ThemedView style={[styles.socBarFill, { width: `${Math.max(0, Math.min(100, soc ?? 0))}%` }]} />
                 </ThemedView>
