@@ -12,7 +12,7 @@ import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from .api.routes import devices_router, energy_router, optimization_router, weather_router
+from .api.routes import auth_router, devices_router, energy_router, optimization_router, weather_router
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +35,7 @@ def create_app() -> FastAPI:
         return {"message": "API is running"}
 
     # Keep existing endpoint paths by including routers without prefix.
+    app.include_router(auth_router)
     app.include_router(weather_router)
     app.include_router(energy_router)
     app.include_router(devices_router)
