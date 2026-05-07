@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Alert, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
@@ -13,6 +13,10 @@ export default function LoginScreen() {
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
 
+  useEffect(() => {
+    console.log('LOGIN SCREEN MOUNTED');
+  }, []);
+
   const handleLogin = async () => {
     if (!email.trim() || !password) {
       Alert.alert('Validation', 'Email and password are required.');
@@ -26,10 +30,15 @@ export default function LoginScreen() {
         body: JSON.stringify({ email: email.trim(), password }),
       });
       const payload = await response.json();
+      console.log('[AUTH DEBUG] /auth/login raw response', payload);
       if (!response.ok) {
         throw new Error(payload?.detail ?? 'Login failed');
       }
       await setAuthToken(payload.access_token);
+      console.log('[AUTH DEBUG] Token stored after login', {
+        hasToken: Boolean(payload.access_token),
+        tokenPreview: payload?.access_token ? `${String(payload.access_token).slice(0, 12)}...` : null,
+      });
       router.replace('/(tabs)');
     } catch (err) {
       Alert.alert('Login failed', err instanceof Error ? err.message : 'Unknown error');

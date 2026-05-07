@@ -34,10 +34,15 @@ export default function RegisterScreen() {
         }),
       });
       const payload = await response.json();
+      console.log('[AUTH DEBUG] /auth/register raw response', payload);
       if (!response.ok) {
         throw new Error(payload?.detail ?? 'Registration failed');
       }
       await setAuthToken(payload.access_token);
+      console.log('[AUTH DEBUG] Token stored after register', {
+        hasToken: Boolean(payload.access_token),
+        tokenPreview: payload?.access_token ? `${String(payload.access_token).slice(0, 12)}...` : null,
+      });
       router.replace('/(tabs)');
     } catch (err) {
       Alert.alert('Registration failed', err instanceof Error ? err.message : 'Unknown error');

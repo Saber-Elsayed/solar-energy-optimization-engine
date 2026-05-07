@@ -1,10 +1,13 @@
 import { useRouter } from 'expo-router';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { BatteryStatusCard } from '@/components/battery-status-card';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
+import { AUTH_TOKEN_MISSING_ERROR, authFetch, isUnauthorized } from '@/lib/api';
+import { clearAuthToken } from '@/lib/auth';
 
 type ApiDevice = {
   id: string;
@@ -45,8 +48,6 @@ const DEVICES_URL = Platform.OS === 'android' ? 'http://10.0.2.2:8000/devices' :
 const ENERGY_LATEST_URL = Platform.OS === 'android' ? 'http://10.0.2.2:8000/energy-data/latest' : 'http://127.0.0.1:8000/energy-data/latest';
 const CITIES_URL = Platform.OS === 'android' ? 'http://10.0.2.2:8000/cities' : 'http://127.0.0.1:8000/cities';
 const OPTIMIZE_URL = Platform.OS === 'android' ? 'http://10.0.2.2:8000/optimize' : 'http://127.0.0.1:8000/optimize';
-const RAPID_DISCHARGE_DROP = 1.5;
-const SAFE_VOLTAGE_THRESHOLD = 11.5;
 
 function optimizeDevices(
   devices: ApiDevice[],
@@ -170,10 +171,8 @@ function optimizeDevices(
 
 export default function HomeScreen() {
   const router = useRouter();
-  const previousVoltage = useRef<number | null>(null);
 
   const [devices, setDevices] = useState<ApiDevice[]>([]);
-  const [battery, setBattery] = useState<EnergyDataItem | null>(null);
   const [loading, setLoading] = useState(true);
   const [alerts, setAlerts] = useState<string[]>([]);
 
@@ -184,40 +183,19 @@ export default function HomeScreen() {
   const [batteryCapacityWh, setBatteryCapacityWh] = useState('1500');
   const [weatherLoading, setWeatherLoading] = useState(false);
 
-  const voltage = typeof battery?.voltage === 'number' ? battery.voltage : 0;
-  const current = typeof battery?.current === 'number' ? battery.current : 0;
-  const soc = typeof battery?.soc === 'number' ? battery.soc : null;
   const batteryCapacityWhValue = useMemo(() => {
     const parsed = Number(batteryCapacityWh.replace(',', '.'));
     if (Number.isNaN(parsed) || parsed <= 0) return 0;
     return parsed;
   }, [batteryCapacityWh]);
-  const socNormalized = useMemo(() => (soc !== null ? soc / 100 : 0), [soc]);
-  const availableEnergyWh = useMemo(() => {
-    if (soc !== null) {
-      return batteryCapacityWhValue * socNormalized;
-    }
-    return batteryCapacityWhValue;
-  }, [batteryCapacityWhValue, soc, socNormalized]);
+  const availableEnergyWh = batteryCapacityWhValue;
   const optimization = useMemo(
     () => optimizeDevices(devices, availableEnergyWh),
     [devices, availableEnergyWh],
   );
 
-  const evaluateAlerts = (latestSoc: number | undefined, latestAvailableEnergyWh: number) => {
+  const evaluateAlerts = () => {
     const dynamicAlerts: string[] = [];
-    const socValue = typeof latestSoc === 'number' ? latestSoc : null;
-    const nextHourUsageWh = devices.reduce((sum, d) => sum + d.power * (d.duration / 60), 0);
-
-    if (socValue !== null && socValue < 25) {
-      dynamicAlerts.push('⚠️ Low battery level');
-    }
-    if (socValue !== null && socValue < 35 && nextHourUsageWh > latestAvailableEnergyWh) {
-      dynamicAlerts.push('⚠️ High usage may drain battery soon');
-    }
-    if (socValue !== null && latestAvailableEnergyWh > 0 && nextHourUsageWh > latestAvailableEnergyWh) {
-      dynamicAlerts.push('⚠️ Risk of battery depletion');
-    }
     if (optimization.blockedMandatoryCount > 0) {
       dynamicAlerts.push('⚠️ Not enough energy for required devices');
     }
@@ -229,30 +207,19 @@ export default function HomeScreen() {
 
   const fetchDashboardData = async () => {
     try {
-      const [devicesRes, energyRes] = await Promise.all([
-        fetch(`${DEVICES_URL}?t=${Date.now()}`),
-        fetch(`${ENERGY_LATEST_URL}?t=${Date.now()}`),
-      ]);
+      const devicesRes = await authFetch(`${DEVICES_URL}?t=${Date.now()}`);
+      if (isUnauthorized(devicesRes)) {
+        await handleLogout();
+        return;
+      }
       if (devicesRes.ok) {
         const devicesData = (await devicesRes.json()) as ApiDevice[];
         if (Array.isArray(devicesData)) setDevices(devicesData);
       }
-      if (energyRes.ok) {
-        const latest = (await energyRes.json()) as EnergyDataItem;
-        const latestSoc = typeof latest?.soc === 'number' ? latest.soc : undefined;
-        const latestSocNormalized = typeof latestSoc === 'number' ? latestSoc / 100 : 0;
-        const latestAvailableEnergyWh =
-          typeof latestSoc === 'number'
-            ? batteryCapacityWhValue * latestSocNormalized
-            : batteryCapacityWhValue;
-        console.log('[Energy] Inputs and calculation', {
-          soc_raw: latestSoc,
-          soc_div_100: latestSocNormalized,
-          battery_capacity: batteryCapacityWhValue,
-          available_energy: latestAvailableEnergyWh,
-        });
-        setBattery(latest);
-        evaluateAlerts(latest?.soc, latestAvailableEnergyWh);
+    } catch (err) {
+      if (err instanceof Error && err.message === AUTH_TOKEN_MISSING_ERROR) {
+        await handleLogout();
+        return;
       }
     } finally {
       setLoading(false);
@@ -262,14 +229,23 @@ export default function HomeScreen() {
   const fetchWeather = async (targetCity: string) => {
     setWeatherLoading(true);
     try {
-      const res = await fetch(OPTIMIZE_URL, {
+      const res = await authFetch(OPTIMIZE_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ city: targetCity, devices: [] }),
       });
+      if (isUnauthorized(res)) {
+        await handleLogout();
+        return;
+      }
       if (!res.ok) return;
       const data = (await res.json()) as { weather?: OptimizeWeather };
       setWeather(data.weather ?? null);
+    } catch (err) {
+      if (err instanceof Error && err.message === AUTH_TOKEN_MISSING_ERROR) {
+        await handleLogout();
+        return;
+      }
     } finally {
       setWeatherLoading(false);
     }
@@ -277,11 +253,11 @@ export default function HomeScreen() {
 
   useEffect(() => {
     void fetchDashboardData();
-    const id = setInterval(() => {
-      void fetchDashboardData();
-    }, 5000);
-    return () => clearInterval(id);
   }, []);
+
+  useEffect(() => {
+    evaluateAlerts();
+  }, [optimization.blockedMandatoryCount, optimization.blockedOptionalCount]);
 
   useEffect(() => {
     const query = city.trim();
@@ -310,6 +286,11 @@ export default function HomeScreen() {
     setCity(item.name);
     setCitySuggestions([]);
     void fetchWeather(item.name);
+  };
+
+  const handleLogout = async () => {
+    await clearAuthToken();
+    router.replace('/login');
   };
 
   return (
@@ -352,36 +333,24 @@ export default function HomeScreen() {
         </ThemedView>
 
         <ThemedView style={styles.topHeaderCard}>
-          <ThemedText type="title">Manage Products</ThemedText>
+          <ThemedView style={styles.topHeaderRow}>
+            <ThemedText type="title">Manage Products</ThemedText>
+            <Pressable style={({ pressed }) => [styles.logoutButton, pressed && styles.buttonPressed]} onPress={() => void handleLogout()}>
+              <Text style={styles.logoutButtonText}>Logout</Text>
+            </Pressable>
+          </ThemedView>
           <Pressable style={({ pressed }) => [styles.button, pressed && styles.buttonPressed]} onPress={() => router.push('/manage-devices')}>
             <Text style={styles.buttonText}>Manage Electrical Devices</Text>
           </Pressable>
         </ThemedView>
 
         <ThemedView style={styles.row}>
-          <ThemedView style={[styles.card, styles.infoBlue]}>
-            <ThemedText type="subtitle">Battery</ThemedText>
-            {loading ? (
-              <ActivityIndicator size="small" color="#0a7ea4" />
-            ) : (
-              <>
-                <ThemedText>Voltage: {battery?.voltage !== undefined ? String(battery.voltage) : 'N/A'}</ThemedText>
-                <ThemedText>Current: {battery?.current !== undefined ? String(battery.current) : 'N/A'}</ThemedText>
-                <ThemedText style={styles.socText}>SOC: {battery?.soc !== undefined ? `${String(battery.soc)}%` : 'N/A'}</ThemedText>
-                <ThemedView style={styles.socBarTrack}>
-                  <ThemedView style={[styles.socBarFill, { width: `${Math.max(0, Math.min(100, soc ?? 0))}%` }]} />
-                </ThemedView>
-              </>
-            )}
-            <ThemedText style={styles.label}>Battery Capacity</ThemedText>
-            <TextInput
-              style={styles.input}
-              value={batteryCapacityWh}
-              onChangeText={setBatteryCapacityWh}
-              keyboardType="decimal-pad"
-            />
-            <ThemedText style={styles.muted}>Available Energy: {availableEnergyWh.toFixed(1)}</ThemedText>
-          </ThemedView>
+          <BatteryStatusCard
+            energyLatestUrl={ENERGY_LATEST_URL}
+            batteryCapacityWh={batteryCapacityWh}
+            onBatteryCapacityChange={setBatteryCapacityWh}
+            onUnauthorized={handleLogout}
+          />
 
           <ThemedView style={[styles.card, styles.safeGreen]}>
             <ThemedText type="subtitle">Optimization Results</ThemedText>
@@ -459,6 +428,11 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 3 },
     elevation: 2,
   },
+  topHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
   row: {
     flexDirection: 'row',
     gap: 12,
@@ -512,6 +486,19 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     alignItems: 'center',
   },
+  logoutButton: {
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#0a7ea4',
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    backgroundColor: '#ffffff',
+  },
+  logoutButtonText: {
+    color: '#0a7ea4',
+    fontWeight: '700',
+    fontSize: 13,
+  },
   buttonPressed: {
     opacity: 0.85,
   },
@@ -553,19 +540,6 @@ const styles = StyleSheet.create({
   },
   muted: { opacity: 0.7 },
   blockedTitle: { marginTop: 10 },
-  socText: { fontWeight: '700', color: '#1b4b7a' },
-  socBarTrack: {
-    height: 8,
-    borderRadius: 999,
-    backgroundColor: '#dbe8f7',
-    overflow: 'hidden',
-    marginTop: 2,
-    marginBottom: 2,
-  },
-  socBarFill: {
-    height: '100%',
-    backgroundColor: '#1f7a34',
-  },
   sectionSpacing: {
     marginBottom: 8,
   },

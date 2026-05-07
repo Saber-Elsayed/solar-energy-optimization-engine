@@ -7,15 +7,15 @@ from ..db.mongo import get_devices_collection
 from ..models.device import DeviceItem
 
 
-def create_device(device: DeviceItem) -> str:
-    result = get_devices_collection().insert_one(device.model_dump())
+def create_device(device: DeviceItem, user_id: str) -> str:
+    result = get_devices_collection().insert_one({**device.model_dump(), "user_id": user_id})
     return str(result.inserted_id)
 
 
-def list_devices() -> List[dict]:
+def list_devices(user_id: str) -> List[dict]:
     records = list(
         get_devices_collection().find(
-            {},
+            {"user_id": user_id},
             {
                 "_id": 1,
                 "name": 1,
@@ -43,14 +43,14 @@ def list_devices() -> List[dict]:
     ]
 
 
-def update_device(device_id: str, device: DeviceItem) -> tuple[bool, str]:
+def update_device(device_id: str, device: DeviceItem, user_id: str) -> tuple[bool, str]:
     obj_id = ObjectId(device_id)
-    result = get_devices_collection().update_one({"_id": obj_id}, {"$set": device.model_dump()})
+    result = get_devices_collection().update_one({"_id": obj_id, "user_id": user_id}, {"$set": device.model_dump()})
     return result.matched_count > 0, device_id
 
 
-def delete_device(device_id: str) -> tuple[bool, str]:
+def delete_device(device_id: str, user_id: str) -> tuple[bool, str]:
     obj_id = ObjectId(device_id)
-    result = get_devices_collection().delete_one({"_id": obj_id})
+    result = get_devices_collection().delete_one({"_id": obj_id, "user_id": user_id})
     return result.deleted_count > 0, device_id
 

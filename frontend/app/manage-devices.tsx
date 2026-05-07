@@ -4,6 +4,9 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
+import { AUTH_TOKEN_MISSING_ERROR, authFetch, isUnauthorized } from '@/lib/api';
+import { clearAuthToken } from '@/lib/auth';
+import { useRouter } from 'expo-router';
 
 type ApiDevicePayload = {
   name: string;
@@ -91,6 +94,7 @@ function fromApiDevice(api: ApiDevice): DeviceRow {
 }
 
 export default function ManageDevicesScreen() {
+  const router = useRouter();
   const [devices, setDevices] = useState<DeviceRow[]>([]);
   const [loadingDevices, setLoadingDevices] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -118,7 +122,12 @@ export default function ManageDevicesScreen() {
   const loadDevices = async () => {
     try {
       setLoadingDevices(true);
-      const res = await fetch(`${DEVICES_URL}?t=${Date.now()}`);
+      const res = await authFetch(`${DEVICES_URL}?t=${Date.now()}`);
+      if (isUnauthorized(res)) {
+        await clearAuthToken();
+        router.replace('/login');
+        return;
+      }
       if (!res.ok) {
         throw new Error(`GET /devices failed (${res.status})`);
       }
@@ -129,6 +138,11 @@ export default function ManageDevicesScreen() {
       const mapped = (data as ApiDevice[]).map(fromApiDevice);
       setDevices(mapped);
     } catch (err) {
+      if (err instanceof Error && err.message === AUTH_TOKEN_MISSING_ERROR) {
+        await clearAuthToken();
+        router.replace('/login');
+        return;
+      }
       const message = err instanceof Error ? err.message : 'Failed to load devices';
       Alert.alert('Load failed', message);
     } finally {
@@ -184,11 +198,16 @@ export default function ManageDevicesScreen() {
 
     try {
       console.log('[ManageDevices] sending request', { method, url, payload });
-      const res = await fetch(url, {
+      const res = await authFetch(url, {
         method,
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
       });
+      if (isUnauthorized(res)) {
+        await clearAuthToken();
+        router.replace('/login');
+        return;
+      }
       if (!res.ok) {
         const errorText = await res.text();
         console.error('[ManageDevices] request failed', { status: res.status, body: errorText });
@@ -216,6 +235,11 @@ export default function ManageDevicesScreen() {
       resetForm();
       Alert.alert('Success', isEditing ? 'Device updated successfully' : 'Device added successfully');
     } catch (err) {
+      if (err instanceof Error && err.message === AUTH_TOKEN_MISSING_ERROR) {
+        await clearAuthToken();
+        router.replace('/login');
+        return;
+      }
       const message = err instanceof Error ? err.message : 'Failed to save device';
       Alert.alert('Save failed', message);
     }
@@ -236,11 +260,21 @@ export default function ManageDevicesScreen() {
     const previous = devices;
     setDevices((curr) => curr.filter((item) => item.id !== deviceId));
     try {
-      const res = await fetch(`${DEVICES_URL}/${deviceId}`, { method: 'DELETE' });
+      const res = await authFetch(`${DEVICES_URL}/${deviceId}`, { method: 'DELETE' });
+      if (isUnauthorized(res)) {
+        await clearAuthToken();
+        router.replace('/login');
+        return;
+      }
       if (!res.ok) {
         throw new Error(`DELETE failed (${res.status})`);
       }
     } catch (err) {
+      if (err instanceof Error && err.message === AUTH_TOKEN_MISSING_ERROR) {
+        await clearAuthToken();
+        router.replace('/login');
+        return;
+      }
       setDevices(previous);
       const message = err instanceof Error ? err.message : 'Failed to delete device';
       Alert.alert('Delete failed', message);

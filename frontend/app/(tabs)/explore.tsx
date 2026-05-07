@@ -1,8 +1,11 @@
 import { useEffect, useState } from 'react';
 import { ActivityIndicator, Platform, Pressable, ScrollView, StyleSheet, TextInput } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useRouter } from 'expo-router';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
+import { AUTH_TOKEN_MISSING_ERROR, authFetch, isUnauthorized } from '@/lib/api';
+import { clearAuthToken } from '@/lib/auth';
 type CitySuggestion = {
   name: string;
   country: string;
@@ -21,6 +24,7 @@ const CITIES_URL = Platform.OS === 'android' ? 'http://10.0.2.2:8000/cities' : '
 const OPTIMIZE_URL = Platform.OS === 'android' ? 'http://10.0.2.2:8000/optimize' : 'http://127.0.0.1:8000/optimize';
 
 export default function SelectCityScreen() {
+  const router = useRouter();
   const [query, setQuery] = useState('Tel Aviv');
   const [suggestions, setSuggestions] = useState<CitySuggestion[]>([]);
   const [selected, setSelected] = useState<CitySuggestion | null>(null);
@@ -70,15 +74,25 @@ export default function SelectCityScreen() {
     try {
       setLoadingWeather(true);
       setError(null);
-      const res = await fetch(OPTIMIZE_URL, {
+      const res = await authFetch(OPTIMIZE_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ city, devices: [] }),
       });
+      if (isUnauthorized(res)) {
+        await clearAuthToken();
+        router.replace('/login');
+        return;
+      }
       if (!res.ok) throw new Error(`Weather fetch failed (${res.status})`);
       const data = (await res.json()) as WeatherResponse;
       setWeather(data.weather ?? null);
     } catch (err) {
+      if (err instanceof Error && err.message === AUTH_TOKEN_MISSING_ERROR) {
+        await clearAuthToken();
+        router.replace('/login');
+        return;
+      }
       setWeather(null);
       setError(err instanceof Error ? err.message : 'Failed to load weather');
     } finally {
