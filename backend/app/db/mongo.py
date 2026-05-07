@@ -32,3 +32,7 @@ def get_energy_collection() -> Collection:
 def get_devices_collection() -> Collection:
     return get_db()["devices"]
 
+
+def get_users_collection() -> Collection:
+    return get_db()["users"]
+
