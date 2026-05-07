@@ -37,6 +37,7 @@ type CitySuggestion = {
 
 type DeviceDecision = {
   device: ApiDevice;
+  deviceEnergyWh: number;
   reason?: string;
 };
 
@@ -49,32 +50,122 @@ const SAFE_VOLTAGE_THRESHOLD = 11.5;
 
 function optimizeDevices(
   devices: ApiDevice[],
-  availablePowerW: number,
   availableEnergyWh: number,
 ) {
   let remainingEnergyWh = availableEnergyWh;
-  const ordered = [...devices].sort((a, b) => Number(b.essential) - Number(a.essential) || b.priority - a.priority);
   const allowed: DeviceDecision[] = [];
   const blocked: DeviceDecision[] = [];
+  const mandatoryDevices = devices.filter((d) => d.essential);
+  const optionalDevices = devices.filter((d) => !d.essential);
+  let totalDeviceEnergyWh = 0;
+  let mandatoryEnergyWh = 0;
+  let optionalEnergyWh = 0;
 
-  for (const device of ordered) {
+  console.log('[Optimization] New cycle start', {
+    available_energy_wh: availableEnergyWh,
+    device_count: devices.length,
+    mandatory_count: mandatoryDevices.length,
+    optional_count: optionalDevices.length,
+  });
+
+  for (const device of mandatoryDevices) {
     const usageHours = device.duration / 60;
     const requiredEnergyWh = device.power * usageHours;
-
-    if (availablePowerW > 0 && device.power > availablePowerW) {
-      blocked.push({ device, reason: 'Power exceeds current supply' });
-      continue;
-    }
+    totalDeviceEnergyWh += requiredEnergyWh;
+    mandatoryEnergyWh += requiredEnergyWh;
+    console.log('[Optimization] Device energy check', {
+      device: device.name,
+      category: 'mandatory',
+      power_w: device.power,
+      usage_time_hours: usageHours,
+      device_energy_wh: requiredEnergyWh,
+      remaining_before_wh: remainingEnergyWh,
+    });
 
     if (requiredEnergyWh <= remainingEnergyWh) {
-      allowed.push({ device });
+      allowed.push({ device, deviceEnergyWh: requiredEnergyWh });
       remainingEnergyWh -= requiredEnergyWh;
+      console.log('[Optimization] Decision', {
+        device: device.name,
+        decision: 'allowed',
+        category: 'mandatory',
+        remaining_after_wh: remainingEnergyWh,
+      });
     } else {
-      blocked.push({ device, reason: 'Insufficient battery energy' });
+      blocked.push({ device, deviceEnergyWh: requiredEnergyWh, reason: 'Not enough available energy' });
+      console.log('[Optimization] Decision', {
+        device: device.name,
+        decision: 'blocked',
+        category: 'mandatory',
+        reason: 'Not enough available energy',
+        remaining_after_wh: remainingEnergyWh,
+      });
     }
   }
 
-  return { allowed, blocked, remainingEnergyWh };
+  const optionalWithEnergy = optionalDevices
+    .map((device) => {
+      const usageHours = device.duration / 60;
+      const requiredEnergyWh = device.power * usageHours;
+      return { device, requiredEnergyWh, usageHours };
+    })
+    .sort((a, b) => a.requiredEnergyWh - b.requiredEnergyWh);
+
+  for (const item of optionalWithEnergy) {
+    const { device, requiredEnergyWh, usageHours } = item;
+    totalDeviceEnergyWh += requiredEnergyWh;
+    optionalEnergyWh += requiredEnergyWh;
+    console.log('[Optimization] Device energy check', {
+      device: device.name,
+      category: 'optional',
+      power_w: device.power,
+      usage_time_hours: usageHours,
+      device_energy_wh: requiredEnergyWh,
+      remaining_before_wh: remainingEnergyWh,
+    });
+
+    if (requiredEnergyWh <= remainingEnergyWh) {
+      allowed.push({ device, deviceEnergyWh: requiredEnergyWh });
+      remainingEnergyWh -= requiredEnergyWh;
+      console.log('[Optimization] Decision', {
+        device: device.name,
+        decision: 'allowed',
+        category: 'optional',
+        remaining_after_wh: remainingEnergyWh,
+      });
+    } else {
+      blocked.push({ device, deviceEnergyWh: requiredEnergyWh, reason: 'Exceeds remaining battery capacity' });
+      console.log('[Optimization] Decision', {
+        device: device.name,
+        decision: 'blocked',
+        category: 'optional',
+        reason: 'Exceeds remaining battery capacity',
+        remaining_after_wh: remainingEnergyWh,
+      });
+    }
+  }
+
+  const blockedMandatoryCount = blocked.filter((item) => item.device.essential).length;
+  const blockedOptionalCount = blocked.filter((item) => !item.device.essential).length;
+
+  console.log('[Optimization] Cycle summary', {
+    total_device_energy_wh: totalDeviceEnergyWh,
+    mandatory_energy_wh: mandatoryEnergyWh,
+    optional_energy_wh: optionalEnergyWh,
+    remaining_energy_wh: remainingEnergyWh,
+    allowed_count: allowed.length,
+    blocked_count: blocked.length,
+    blocked_mandatory_count: blockedMandatoryCount,
+    blocked_optional_count: blockedOptionalCount,
+  });
+
+  return {
+    allowed,
+    blocked,
+    remainingEnergyWh,
+    blockedMandatoryCount,
+    blockedOptionalCount,
+  };
 }
 
 export default function HomeScreen() {
@@ -96,51 +187,42 @@ export default function HomeScreen() {
   const voltage = typeof battery?.voltage === 'number' ? battery.voltage : 0;
   const current = typeof battery?.current === 'number' ? battery.current : 0;
   const soc = typeof battery?.soc === 'number' ? battery.soc : null;
-  const powerW = useMemo(() => voltage * current, [voltage, current]);
   const batteryCapacityWhValue = useMemo(() => {
     const parsed = Number(batteryCapacityWh.replace(',', '.'));
     if (Number.isNaN(parsed) || parsed <= 0) return 0;
     return parsed;
   }, [batteryCapacityWh]);
+  const socNormalized = useMemo(() => (soc !== null ? soc / 100 : 0), [soc]);
   const availableEnergyWh = useMemo(() => {
     if (soc !== null) {
-      return batteryCapacityWhValue * (soc / 100);
+      return batteryCapacityWhValue * socNormalized;
     }
     return batteryCapacityWhValue;
-  }, [batteryCapacityWhValue, soc]);
+  }, [batteryCapacityWhValue, soc, socNormalized]);
   const optimization = useMemo(
-    () => optimizeDevices(devices, powerW, availableEnergyWh),
-    [devices, powerW, availableEnergyWh],
+    () => optimizeDevices(devices, availableEnergyWh),
+    [devices, availableEnergyWh],
   );
 
-  const evaluateAlerts = (
-    latestVoltage: number | undefined,
-    latestSoc: number | undefined,
-    latestPowerW: number,
-    latestAvailableEnergyWh: number,
-  ) => {
+  const evaluateAlerts = (latestSoc: number | undefined, latestAvailableEnergyWh: number) => {
     const dynamicAlerts: string[] = [];
     const socValue = typeof latestSoc === 'number' ? latestSoc : null;
-    const totalRequestedW = devices.reduce((sum, d) => sum + d.power, 0);
-    const nextHourUsageWh = devices.reduce((sum, d) => sum + d.power * Math.min(d.duration, 60) / 60, 0);
+    const nextHourUsageWh = devices.reduce((sum, d) => sum + d.power * (d.duration / 60), 0);
 
-    if (typeof latestVoltage === 'number') {
-      if (previousVoltage.current !== null && previousVoltage.current - latestVoltage >= RAPID_DISCHARGE_DROP) {
-        dynamicAlerts.push('⚠️ Rapid battery discharge detected');
-      }
-      if (latestVoltage < SAFE_VOLTAGE_THRESHOLD) {
-        dynamicAlerts.push('⚠️ Risk of power outage - reduce load');
-      }
-      previousVoltage.current = latestVoltage;
-    }
     if (socValue !== null && socValue < 25) {
       dynamicAlerts.push('⚠️ Low battery level');
     }
-    if (socValue !== null && socValue < 35 && latestPowerW > 0 && totalRequestedW > latestPowerW) {
+    if (socValue !== null && socValue < 35 && nextHourUsageWh > latestAvailableEnergyWh) {
       dynamicAlerts.push('⚠️ High usage may drain battery soon');
     }
     if (socValue !== null && latestAvailableEnergyWh > 0 && nextHourUsageWh > latestAvailableEnergyWh) {
       dynamicAlerts.push('⚠️ Risk of battery depletion');
+    }
+    if (optimization.blockedMandatoryCount > 0) {
+      dynamicAlerts.push('⚠️ Not enough energy for required devices');
+    }
+    if (optimization.blockedOptionalCount > 0) {
+      dynamicAlerts.push('Optional devices limited due to energy constraints');
     }
     setAlerts(dynamicAlerts);
   };
@@ -157,16 +239,20 @@ export default function HomeScreen() {
       }
       if (energyRes.ok) {
         const latest = (await energyRes.json()) as EnergyDataItem;
-        const latestVoltage = typeof latest?.voltage === 'number' ? latest.voltage : 0;
-        const latestCurrent = typeof latest?.current === 'number' ? latest.current : 0;
         const latestSoc = typeof latest?.soc === 'number' ? latest.soc : undefined;
-        const latestPowerW = latestVoltage * latestCurrent;
+        const latestSocNormalized = typeof latestSoc === 'number' ? latestSoc / 100 : 0;
         const latestAvailableEnergyWh =
           typeof latestSoc === 'number'
-            ? batteryCapacityWhValue * (latestSoc / 100)
+            ? batteryCapacityWhValue * latestSocNormalized
             : batteryCapacityWhValue;
+        console.log('[Energy] Inputs and calculation', {
+          soc_raw: latestSoc,
+          soc_div_100: latestSocNormalized,
+          battery_capacity: batteryCapacityWhValue,
+          available_energy: latestAvailableEnergyWh,
+        });
         setBattery(latest);
-        evaluateAlerts(latest?.voltage, latest?.soc, latestPowerW, latestAvailableEnergyWh);
+        evaluateAlerts(latest?.soc, latestAvailableEnergyWh);
       }
     } finally {
       setLoading(false);
@@ -266,7 +352,7 @@ export default function HomeScreen() {
         </ThemedView>
 
         <ThemedView style={styles.topHeaderCard}>
-          <ThemedText type="title">Smart Energy Dashboard</ThemedText>
+          <ThemedText type="title">Manage Products</ThemedText>
           <Pressable style={({ pressed }) => [styles.button, pressed && styles.buttonPressed]} onPress={() => router.push('/manage-devices')}>
             <Text style={styles.buttonText}>Manage Electrical Devices</Text>
           </Pressable>
@@ -304,7 +390,9 @@ export default function HomeScreen() {
               <ThemedText style={styles.muted}>No devices can run now.</ThemedText>
             ) : (
               optimization.allowed.map((item) => (
-                <ThemedText key={`allowed-${item.device.id}`}>- {item.device.name}</ThemedText>
+                <ThemedText key={`allowed-${item.device.id}`}>
+                  - {item.device.name} ({item.device.essential ? 'Required' : 'Optional'}) - {item.deviceEnergyWh.toFixed(1)} Wh
+                </ThemedText>
               ))
             )}
 
@@ -316,7 +404,7 @@ export default function HomeScreen() {
             ) : (
               optimization.blocked.map((item) => (
                 <ThemedText key={`blocked-${item.device.id}`}>
-                  - {item.device.name}: {item.reason}
+                  - {item.device.name} ({item.device.essential ? 'Required' : 'Optional'}): {item.reason}
                 </ThemedText>
               ))
             )}
