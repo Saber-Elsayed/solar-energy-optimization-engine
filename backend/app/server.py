@@ -12,7 +12,7 @@ import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from .api.routes import auth_router, devices_router, energy_router, optimization_router, weather_router
+from .api.routes import auth_router, devices_router, energy_router, optimization_router, solar_system_router, weather_router
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +40,7 @@ def create_app() -> FastAPI:
     app.include_router(energy_router)
     app.include_router(devices_router)
     app.include_router(optimization_router)
+    app.include_router(solar_system_router)
 
     return app
 

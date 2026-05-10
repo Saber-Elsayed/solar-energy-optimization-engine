@@ -356,6 +356,9 @@ export default function HomeScreen() {
           <Pressable style={({ pressed }) => [styles.button, pressed && styles.buttonPressed]} onPress={() => router.push('/manage-devices')}>
             <Text style={styles.buttonText}>Manage Electrical Devices</Text>
           </Pressable>
+          <Pressable style={({ pressed }) => [styles.secondaryButton, pressed && styles.buttonPressed]} onPress={() => router.push('/solar-system-settings')}>
+            <Text style={styles.secondaryButtonText}>Solar System Settings</Text>
+          </Pressable>
         </ThemedView>
 
         <ThemedView style={styles.row}>
@@ -517,6 +520,19 @@ const styles = StyleSheet.create({
   },
   buttonText: {
     color: '#fff',
+    fontSize: 15,
+    fontWeight: '600',
+  },
+  secondaryButton: {
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#0a7ea4',
+    borderRadius: 8,
+    alignItems: 'center',
+    paddingVertical: 10,
+    backgroundColor: '#fff',
+  },
+  secondaryButtonText: {
+    color: '#0a7ea4',
     fontSize: 15,
     fontWeight: '600',
   },
