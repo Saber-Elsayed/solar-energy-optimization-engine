@@ -1,7 +1,8 @@
-import { useEffect, useState } from 'react';
-import { Alert, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput } from 'react-native';
+import { useCallback, useEffect, useState } from 'react';
+import { ActivityIndicator, Alert, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { CenterAutoToast } from '@/components/center-auto-toast';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { authFetch } from '@/lib/api';
@@ -17,44 +18,62 @@ type SolarSystemResponse = {
 
 type SolarSystemSaveResponse = {
   success: boolean;
-  operation: 'created' | 'updated' | string;
+  operation: 'created' | 'updated';
   data: SolarSystemResponse;
 };
 
+type SaveFeedback = { kind: 'success' | 'error'; message: string };
+
 const SOLAR_SYSTEM_URL =
   Platform.OS === 'android' ? 'http://10.0.2.2:8000/solar-system' : 'http://127.0.0.1:8000/solar-system';
+
+const SAVE_FAILURE_MESSAGE = 'Failed to save solar system settings. Please try again.';
 
 export default function SolarSystemSettingsScreen() {
   const [batteryCapacityWh, setBatteryCapacityWh] = useState('1500');
   const [inverterMaxPowerW, setInverterMaxPowerW] = useState('2000');
   const [hasProfile, setHasProfile] = useState(false);
-  const [loading, setLoading] = useState(false);
+  const [profileLoading, setProfileLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [saveFeedback, setSaveFeedback] = useState<SaveFeedback | null>(null);
+
+  const fetchProfileFromServer = useCallback(async () => {
+    const response = await authFetch(SOLAR_SYSTEM_URL);
+    if (response.status === 404) {
+      setHasProfile(false);
+      return;
+    }
+    if (!response.ok) {
+      throw new Error(`Failed to load settings (${response.status})`);
+    }
+    const profile = (await response.json()) as SolarSystemResponse;
+    setBatteryCapacityWh(String(profile.battery_capacity_wh));
+    setInverterMaxPowerW(String(profile.inverter_max_power_w));
+    setHasProfile(true);
+  }, []);
 
   useEffect(() => {
+    let cancelled = false;
     const loadProfile = async () => {
       try {
-        setLoading(true);
-        const response = await authFetch(SOLAR_SYSTEM_URL);
-        if (response.status === 404) {
-          setHasProfile(false);
-          return;
-        }
-        if (!response.ok) {
-          throw new Error(`Failed to load settings (${response.status})`);
-        }
-        const profile = (await response.json()) as SolarSystemResponse;
-        setBatteryCapacityWh(String(profile.battery_capacity_wh));
-        setInverterMaxPowerW(String(profile.inverter_max_power_w));
-        setHasProfile(true);
+        setProfileLoading(true);
+        await fetchProfileFromServer();
       } catch (err) {
-        Alert.alert('Load failed', err instanceof Error ? err.message : 'Failed to load solar system settings');
+        if (!cancelled) {
+          Alert.alert('Load failed', err instanceof Error ? err.message : 'Failed to load solar system settings');
+        }
       } finally {
-        setLoading(false);
+        if (!cancelled) {
+          setProfileLoading(false);
+        }
       }
     };
 
     void loadProfile();
-  }, []);
+    return () => {
+      cancelled = true;
+    };
+  }, [fetchProfileFromServer]);
 
   const saveSettings = async () => {
     const payload = {
@@ -72,8 +91,9 @@ export default function SolarSystemSettingsScreen() {
       return;
     }
 
+    setSaving(true);
+    setSaveFeedback(null);
     try {
-      setLoading(true);
       console.log('[SOLAR DEBUG] request payload:', payload);
       const response = await authFetch(SOLAR_SYSTEM_URL, {
         method: hasProfile ? 'PUT' : 'POST',
@@ -84,26 +104,41 @@ export default function SolarSystemSettingsScreen() {
       if (!response.ok) {
         const text = await response.text();
         console.log('[SOLAR DEBUG] save response body:', text);
-        throw new Error(`Save failed (${response.status}): ${text}`);
+        setSaveFeedback({ kind: 'error', message: SAVE_FAILURE_MESSAGE });
+        return;
       }
       const saveResult = (await response.json()) as SolarSystemSaveResponse;
       console.log('[SOLAR DEBUG] save result:', saveResult);
+
+      if (!saveResult.success) {
+        setSaveFeedback({ kind: 'error', message: SAVE_FAILURE_MESSAGE });
+        return;
+      }
+
       const savedProfile = saveResult.data;
       setBatteryCapacityWh(String(savedProfile.battery_capacity_wh));
       setInverterMaxPowerW(String(savedProfile.inverter_max_power_w));
       setHasProfile(true);
-      if (saveResult.success && saveResult.operation === 'created') {
-        Alert.alert('Success', 'Solar system settings created successfully');
-      } else if (saveResult.success && saveResult.operation === 'updated') {
-        Alert.alert('Success', 'Solar system settings updated successfully');
-      } else {
-        Alert.alert('Success', 'Solar system settings saved successfully');
+
+      try {
+        await fetchProfileFromServer();
+      } catch (refreshErr) {
+        console.log('[SOLAR DEBUG] refresh after save error:', refreshErr);
+        setBatteryCapacityWh(String(savedProfile.battery_capacity_wh));
+        setInverterMaxPowerW(String(savedProfile.inverter_max_power_w));
+        setHasProfile(true);
       }
+
+      const successMessage =
+        saveResult.operation === 'created'
+          ? 'Solar system settings created successfully'
+          : 'Solar system settings updated successfully';
+      setSaveFeedback({ kind: 'success', message: successMessage });
     } catch (err) {
       console.log('[SOLAR DEBUG] save error:', err);
-      Alert.alert('Save failed', 'Failed to save solar system settings. Please try again.');
+      setSaveFeedback({ kind: 'error', message: SAVE_FAILURE_MESSAGE });
     } finally {
-      setLoading(false);
+      setSaving(false);
     }
   };
 
@@ -119,11 +154,21 @@ export default function SolarSystemSettingsScreen() {
           <ThemedText style={styles.label}>Inverter Max Power (W)</ThemedText>
           <TextInput style={styles.input} value={inverterMaxPowerW} onChangeText={setInverterMaxPowerW} keyboardType="decimal-pad" />
 
-          <Pressable style={({ pressed }) => [styles.button, pressed && styles.buttonPressed]} onPress={() => void saveSettings()} disabled={loading}>
-            <Text style={styles.buttonText}>{loading ? 'Saving...' : hasProfile ? 'Update Settings' : 'Save Settings'}</Text>
+          <Pressable
+            style={({ pressed }) => [styles.button, pressed && !saving && styles.buttonPressed, saving && styles.buttonDisabled]}
+            onPress={() => void saveSettings()}
+            disabled={saving || profileLoading}
+          >
+            <View style={styles.buttonInner}>
+              {saving ? <ActivityIndicator color="#fff" /> : null}
+              <Text style={styles.buttonText}>
+                {saving ? 'Saving...' : hasProfile ? 'Update Settings' : 'Save Settings'}
+              </Text>
+            </View>
           </Pressable>
         </ThemedView>
       </ScrollView>
+      <CenterAutoToast feedback={saveFeedback} onDismiss={() => setSaveFeedback(null)} />
     </SafeAreaView>
   );
 }
@@ -157,6 +202,12 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
   },
   buttonPressed: { opacity: 0.85 },
+  buttonDisabled: { opacity: 0.72 },
+  buttonInner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
   buttonText: { color: '#fff', fontSize: 15, fontWeight: '600' },
 });
 

@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -17,6 +18,6 @@ class SolarSystemResponse(SolarSystemPayload):
 
 class SolarSystemSaveResponse(BaseModel):
     success: bool
-    operation: str
+    operation: Literal["created", "updated"]
     data: SolarSystemResponse
 

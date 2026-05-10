@@ -5,6 +5,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
+import { authFetch } from '@/lib/api';
 
 type ApiDevice = {
   id: string;
@@ -45,6 +46,12 @@ const DEVICES_URL = Platform.OS === 'android' ? 'http://10.0.2.2:8000/devices' :
 const ENERGY_LATEST_URL = Platform.OS === 'android' ? 'http://10.0.2.2:8000/energy-data/latest' : 'http://127.0.0.1:8000/energy-data/latest';
 const CITIES_URL = Platform.OS === 'android' ? 'http://10.0.2.2:8000/cities' : 'http://127.0.0.1:8000/cities';
 const OPTIMIZE_URL = Platform.OS === 'android' ? 'http://10.0.2.2:8000/optimize' : 'http://127.0.0.1:8000/optimize';
+const SOLAR_SYSTEM_URL =
+  Platform.OS === 'android' ? 'http://10.0.2.2:8000/solar-system' : 'http://127.0.0.1:8000/solar-system';
+
+type SolarSystemProfileResponse = {
+  battery_capacity_wh: number;
+};
 const RAPID_DISCHARGE_DROP = 1.5;
 const SAFE_VOLTAGE_THRESHOLD = 11.5;
 
@@ -181,17 +188,13 @@ export default function HomeScreen() {
   const [citySuggestions, setCitySuggestions] = useState<CitySuggestion[]>([]);
   const [selectedCity, setSelectedCity] = useState<CitySuggestion | null>(null);
   const [weather, setWeather] = useState<OptimizeWeather | null>(null);
-  const [batteryCapacityWh, setBatteryCapacityWh] = useState('1500');
+  const [batteryCapacityWhValue, setBatteryCapacityWhValue] = useState(0);
+  const batteryCapacityWhRef = useRef(0);
   const [weatherLoading, setWeatherLoading] = useState(false);
 
   const voltage = typeof battery?.voltage === 'number' ? battery.voltage : 0;
   const current = typeof battery?.current === 'number' ? battery.current : 0;
   const soc = typeof battery?.soc === 'number' ? battery.soc : null;
-  const batteryCapacityWhValue = useMemo(() => {
-    const parsed = Number(batteryCapacityWh.replace(',', '.'));
-    if (Number.isNaN(parsed) || parsed <= 0) return 0;
-    return parsed;
-  }, [batteryCapacityWh]);
   const socNormalized = useMemo(() => (soc !== null ? soc / 100 : 0), [soc]);
   const availableEnergyWh = useMemo(() => {
     if (soc !== null) {
@@ -229,6 +232,24 @@ export default function HomeScreen() {
 
   const fetchDashboardData = async () => {
     try {
+      let capacityWhForCalc = batteryCapacityWhRef.current;
+
+      try {
+        const solarRes = await authFetch(SOLAR_SYSTEM_URL);
+        if (solarRes.status === 404) {
+          capacityWhForCalc = 0;
+        } else if (solarRes.ok) {
+          const profile = (await solarRes.json()) as SolarSystemProfileResponse;
+          const parsed = Number(profile.battery_capacity_wh);
+          capacityWhForCalc = !Number.isNaN(parsed) && parsed > 0 ? parsed : 0;
+        }
+      } catch {
+        capacityWhForCalc = batteryCapacityWhRef.current;
+      }
+
+      batteryCapacityWhRef.current = capacityWhForCalc;
+      setBatteryCapacityWhValue(capacityWhForCalc);
+
       const [devicesRes, energyRes] = await Promise.all([
         fetch(`${DEVICES_URL}?t=${Date.now()}`),
         fetch(`${ENERGY_LATEST_URL}?t=${Date.now()}`),
@@ -243,12 +264,12 @@ export default function HomeScreen() {
         const latestSocNormalized = typeof latestSoc === 'number' ? latestSoc / 100 : 0;
         const latestAvailableEnergyWh =
           typeof latestSoc === 'number'
-            ? batteryCapacityWhValue * latestSocNormalized
-            : batteryCapacityWhValue;
+            ? capacityWhForCalc * latestSocNormalized
+            : capacityWhForCalc;
         console.log('[Energy] Inputs and calculation', {
           soc_raw: latestSoc,
           soc_div_100: latestSocNormalized,
-          battery_capacity: batteryCapacityWhValue,
+          battery_capacity: capacityWhForCalc,
           available_energy: latestAvailableEnergyWh,
         });
         setBattery(latest);
@@ -376,14 +397,13 @@ export default function HomeScreen() {
                 </ThemedView>
               </>
             )}
-            <ThemedText style={styles.label}>Battery Capacity</ThemedText>
-            <TextInput
-              style={styles.input}
-              value={batteryCapacityWh}
-              onChangeText={setBatteryCapacityWh}
-              keyboardType="decimal-pad"
-            />
-            <ThemedText style={styles.muted}>Available Energy: {availableEnergyWh.toFixed(1)}</ThemedText>
+            <ThemedText style={styles.label}>Available Energy (Wh)</ThemedText>
+            <ThemedText type="defaultSemiBold">{availableEnergyWh.toFixed(1)} Wh</ThemedText>
+            {batteryCapacityWhValue <= 0 ? (
+              <ThemedText style={styles.muted}>
+                Battery capacity comes from Solar System Settings. Configure it there to compute available energy.
+              </ThemedText>
+            ) : null}
           </ThemedView>
 
           <ThemedView style={[styles.card, styles.safeGreen]}>

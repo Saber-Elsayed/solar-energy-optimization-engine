@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, Alert, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput } from 'react-native';
+import { ActivityIndicator, Alert, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { CenterAutoToast } from '@/components/center-auto-toast';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 
@@ -17,6 +18,12 @@ type ApiDevicePayload = {
 
 type ApiDevice = ApiDevicePayload & { id: string };
 
+type DeviceSaveResponse = {
+  success: boolean;
+  operation: 'created' | 'updated';
+  id: string;
+};
+
 type DeviceRow = {
   id: string;
   name: string;
@@ -29,6 +36,10 @@ type DeviceRow = {
 };
 
 const DEVICES_URL = Platform.OS === 'android' ? 'http://10.0.2.2:8000/devices' : 'http://127.0.0.1:8000/devices';
+
+const PRODUCT_SAVE_FAILURE_MESSAGE = 'Failed to save product. Please try again.';
+const PRODUCT_DELETE_FAILURE_MESSAGE = 'Failed to delete product. Please try again.';
+const PRODUCT_DELETED_MESSAGE = 'Product deleted successfully';
 
 function hhmmToHourText(hhmm: string): string {
   const [h, m] = hhmm.split(':').map((v) => Number(v));
@@ -93,6 +104,9 @@ function fromApiDevice(api: ApiDevice): DeviceRow {
 export default function ManageDevicesScreen() {
   const [devices, setDevices] = useState<DeviceRow[]>([]);
   const [loadingDevices, setLoadingDevices] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [toast, setToast] = useState<{ kind: 'success' | 'error' | 'info'; message: string } | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
 
   const [name, setName] = useState('');
@@ -113,7 +127,10 @@ export default function ManageDevicesScreen() {
     setStartHour('8');
     setEndHour('18');
     setEditingId(null);
+    setToast(null);
   };
+
+  const listActionsLocked = deletingId !== null || submitting || loadingDevices;
 
   const loadDevices = async () => {
     try {
@@ -182,6 +199,8 @@ export default function ManageDevicesScreen() {
     const url = isEditing ? `${DEVICES_URL}/${editingId}` : DEVICES_URL;
     const method = isEditing ? 'PUT' : 'POST';
 
+    setSubmitting(true);
+    setToast(null);
     try {
       console.log('[ManageDevices] sending request', { method, url, payload });
       const res = await fetch(url, {
@@ -192,36 +211,36 @@ export default function ManageDevicesScreen() {
       if (!res.ok) {
         const errorText = await res.text();
         console.error('[ManageDevices] request failed', { status: res.status, body: errorText });
-        throw new Error(`${method} failed (${res.status}): ${errorText}`);
+        setToast({ kind: 'error', message: PRODUCT_SAVE_FAILURE_MESSAGE });
+        return;
       }
-      const responseData = (await res.json()) as { id?: string };
-      console.log('[ManageDevices] request success', { status: res.status, responseData });
+      const saveResult = (await res.json()) as DeviceSaveResponse;
+      console.log('[ManageDevices] request success', { status: res.status, saveResult });
 
-      if (!isEditing && responseData?.id) {
-        setDevices((curr) => [
-          {
-            id: responseData.id,
-            name: payload.name,
-            power: payload.power,
-            duration: payload.duration,
-            priority: payload.priority,
-            essential: payload.essential,
-            startTime: hhmmToHourText(payload.start_time),
-            endTime: hhmmToHourText(payload.end_time),
-          },
-          ...curr,
-        ]);
+      if (!saveResult.success) {
+        setToast({ kind: 'error', message: PRODUCT_SAVE_FAILURE_MESSAGE });
+        return;
       }
-      await loadDevices();
+
       resetForm();
-      Alert.alert('Success', isEditing ? 'Device updated successfully' : 'Device added successfully');
+      await loadDevices();
+
+      const successMessage =
+        saveResult.operation === 'created' ? 'Product added successfully' : 'Product updated successfully';
+      setToast({ kind: 'success', message: successMessage });
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to save device';
-      Alert.alert('Save failed', message);
+      console.error('[ManageDevices] save error', err);
+      setToast({ kind: 'error', message: PRODUCT_SAVE_FAILURE_MESSAGE });
+    } finally {
+      setSubmitting(false);
     }
   };
 
   const startEdit = (device: DeviceRow) => {
+    setToast({
+      kind: 'info',
+      message: `“${device.name}” loaded for editing. Update the fields above, then tap Save Changes.`,
+    });
     setEditingId(device.id);
     setName(device.name);
     setPower(String(device.power));
@@ -233,17 +252,25 @@ export default function ManageDevicesScreen() {
   };
 
   const deleteDevice = async (deviceId: string) => {
-    const previous = devices;
-    setDevices((curr) => curr.filter((item) => item.id !== deviceId));
+    setToast(null);
+    setDeletingId(deviceId);
     try {
       const res = await fetch(`${DEVICES_URL}/${deviceId}`, { method: 'DELETE' });
       if (!res.ok) {
-        throw new Error(`DELETE failed (${res.status})`);
+        console.error('[ManageDevices] DELETE failed', { status: res.status });
+        setToast({ kind: 'error', message: PRODUCT_DELETE_FAILURE_MESSAGE });
+        return;
       }
+      if (editingId === deviceId) {
+        resetForm();
+      }
+      setToast({ kind: 'success', message: PRODUCT_DELETED_MESSAGE });
+      await loadDevices();
     } catch (err) {
-      setDevices(previous);
-      const message = err instanceof Error ? err.message : 'Failed to delete device';
-      Alert.alert('Delete failed', message);
+      console.error('[ManageDevices] delete error', err);
+      setToast({ kind: 'error', message: PRODUCT_DELETE_FAILURE_MESSAGE });
+    } finally {
+      setDeletingId(null);
     }
   };
 
@@ -277,12 +304,43 @@ export default function ManageDevicesScreen() {
             <Switch value={essential} onValueChange={setEssential} />
           </ThemedView>
 
-          <Pressable style={({ pressed }) => [styles.primaryButton, pressed && styles.buttonPressed]} onPress={() => void submitDevice()}>
-            <Text style={styles.primaryButtonText}>{isEditing ? 'Save Changes' : 'Add Product'}</Text>
+          <Pressable
+            style={({ pressed }) => [
+              styles.primaryButton,
+              pressed && !listActionsLocked && styles.buttonPressed,
+              listActionsLocked && styles.primaryButtonDisabled,
+            ]}
+            onPress={() => void submitDevice()}
+            disabled={listActionsLocked}
+          >
+            <View style={styles.primaryButtonInner}>
+              {submitting ? <ActivityIndicator color="#fff" /> : null}
+              <Text style={styles.primaryButtonText}>
+                {submitting
+                  ? isEditing
+                    ? 'Saving...'
+                    : 'Adding...'
+                  : isEditing
+                    ? 'Save Changes'
+                    : 'Add Product'}
+              </Text>
+            </View>
           </Pressable>
+
           {isEditing && (
-            <Pressable style={({ pressed }) => [styles.secondaryButton, pressed && styles.buttonPressed]} onPress={resetForm}>
-              <Text style={styles.secondaryButtonText}>Cancel Edit</Text>
+            <Pressable
+              style={({ pressed }) => [styles.secondaryButton, pressed && !submitting && styles.buttonPressed]}
+              onPress={() => resetForm()}
+              disabled={submitting || deletingId !== null}
+            >
+              <Text
+                style={[
+                  styles.secondaryButtonText,
+                  (submitting || deletingId !== null) && styles.secondaryButtonTextDisabled,
+                ]}
+              >
+                Cancel Edit
+              </Text>
             </Pressable>
           )}
         </ThemedView>
@@ -303,17 +361,41 @@ export default function ManageDevicesScreen() {
                 <ThemedText>
                   {d.essential ? 'mandatory' : 'optional'} • {d.startTime}h - {d.endTime}h
                 </ThemedText>
-                <Pressable style={({ pressed }) => [styles.editButton, pressed && styles.buttonPressed]} onPress={() => startEdit(d)}>
+                <Pressable
+                  style={({ pressed }) => [
+                    styles.editButton,
+                    pressed && !listActionsLocked && styles.buttonPressed,
+                    listActionsLocked && styles.rowActionDisabled,
+                  ]}
+                  onPress={() => startEdit(d)}
+                  disabled={listActionsLocked}
+                >
                   <Text style={styles.editButtonText}>Edit</Text>
                 </Pressable>
-                <Pressable style={({ pressed }) => [styles.deleteButton, pressed && styles.buttonPressed]} onPress={() => void deleteDevice(d.id)}>
-                  <Text style={styles.deleteButtonText}>Delete</Text>
+                <Pressable
+                  style={({ pressed }) => [
+                    styles.deleteButton,
+                    pressed && !listActionsLocked && styles.buttonPressed,
+                    listActionsLocked && styles.rowActionDisabled,
+                  ]}
+                  onPress={() => void deleteDevice(d.id)}
+                  disabled={listActionsLocked}
+                >
+                  {deletingId === d.id ? (
+                    <View style={styles.deleteButtonInner}>
+                      <ActivityIndicator size="small" color="#b1321f" />
+                      <Text style={styles.deleteButtonText}>Deleting...</Text>
+                    </View>
+                  ) : (
+                    <Text style={styles.deleteButtonText}>Delete</Text>
+                  )}
                 </Pressable>
               </ThemedView>
             ))
           )}
         </ThemedView>
       </ScrollView>
+      <CenterAutoToast feedback={toast} onDismiss={() => setToast(null)} />
     </SafeAreaView>
   );
 }
@@ -342,6 +424,8 @@ const styles = StyleSheet.create({
   },
   switchRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 6 },
   primaryButton: { marginTop: 10, backgroundColor: '#0a7ea4', borderRadius: 8, alignItems: 'center', paddingVertical: 12 },
+  primaryButtonDisabled: { opacity: 0.72 },
+  primaryButtonInner: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   primaryButtonText: { color: '#fff', fontSize: 15, fontWeight: '600' },
   secondaryButton: {
     marginTop: 8,
@@ -352,6 +436,7 @@ const styles = StyleSheet.create({
     paddingVertical: 11,
   },
   secondaryButtonText: { color: '#0a7ea4', fontSize: 15, fontWeight: '600' },
+  secondaryButtonTextDisabled: { opacity: 0.5 },
   editButton: {
     alignSelf: 'flex-start',
     marginTop: 6,
@@ -362,6 +447,12 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
   },
   editButtonText: { color: '#0a7ea4', fontWeight: '600' },
+  rowActionDisabled: { opacity: 0.5 },
+  deleteButtonInner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
   deleteButton: {
     alignSelf: 'flex-start',
     marginTop: 6,
