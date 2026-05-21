@@ -1,0 +1,53 @@
+from datetime import datetime, timezone
+
+from pymongo.errors import PyMongoError
+
+from ..db.mongo import get_users_collection
+from ..models.user import AuthResponse, UserLoginRequest, UserPublic, UserRegisterRequest
+from ..utils.security import create_access_token, hash_password, verify_password
+
+
+def _to_public_user(user_doc: dict) -> UserPublic:
+    return UserPublic(
+        id=str(user_doc["_id"]),
+        email=user_doc["email"],
+        name=user_doc.get("name", ""),
+        created_at=user_doc.get("created_at"),
+    )
+
+
+def register_user(payload: UserRegisterRequest) -> AuthResponse:
+    users = get_users_collection()
+    normalized_email = payload.email.strip().lower()
+    if not normalized_email:
+        raise ValueError("Email is required")
+
+    if users.find_one({"email": normalized_email}):
+        raise RuntimeError("Email already registered")
+
+    document = {
+        "email": normalized_email,
+        "password_hash": hash_password(payload.password),
+        "name": payload.name.strip(),
+        "created_at": datetime.now(timezone.utc),
+    }
+
+    result = users.insert_one(document)
+    created_user = users.find_one({"_id": result.inserted_id})
+    if not created_user:
+        raise PyMongoError("Failed to load created user")
+
+    token = create_access_token(user_id=str(created_user["_id"]), email=created_user["email"])
+    return AuthResponse(access_token=token, user=_to_public_user(created_user))
+
+
+def login_user(payload: UserLoginRequest) -> AuthResponse:
+    users = get_users_collection()
+    normalized_email = payload.email.strip().lower()
+    user = users.find_one({"email": normalized_email})
+    if not user or not verify_password(payload.password, user.get("password_hash", "")):
+        raise PermissionError("Invalid email or password")
+
+    token = create_access_token(user_id=str(user["_id"]), email=user["email"])
+    return AuthResponse(access_token=token, user=_to_public_user(user))
+

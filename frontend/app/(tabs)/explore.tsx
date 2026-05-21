@@ -1,112 +1,185 @@
-import { Image } from 'expo-image';
-import { Platform, StyleSheet } from 'react-native';
-
-import { Collapsible } from '@/components/ui/collapsible';
-import { ExternalLink } from '@/components/external-link';
-import ParallaxScrollView from '@/components/parallax-scroll-view';
+import { useEffect, useState } from 'react';
+import { ActivityIndicator, Platform, Pressable, ScrollView, StyleSheet, TextInput } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
-import { IconSymbol } from '@/components/ui/icon-symbol';
-import { Fonts } from '@/constants/theme';
+type CitySuggestion = {
+  name: string;
+  country: string;
+};
 
-export default function TabTwoScreen() {
-  return (
-    <ParallaxScrollView
-      headerBackgroundColor={{ light: '#D0D0D0', dark: '#353636' }}
-      headerImage={
-        <IconSymbol
-          size={310}
-          color="#808080"
-          name="chevron.left.forwardslash.chevron.right"
-          style={styles.headerImage}
-        />
-      }>
-      <ThemedView style={styles.titleContainer}>
-        <ThemedText
-          type="title"
-          style={{
-            fontFamily: Fonts.rounded,
-          }}>
-          Explore
-        </ThemedText>
-      </ThemedView>
-      <ThemedText>This app includes example code to help you get started.</ThemedText>
-      <Collapsible title="File-based routing">
-        <ThemedText>
-          This app has two screens:{' '}
-          <ThemedText type="defaultSemiBold">app/(tabs)/index.tsx</ThemedText> and{' '}
-          <ThemedText type="defaultSemiBold">app/(tabs)/explore.tsx</ThemedText>
-        </ThemedText>
-        <ThemedText>
-          The layout file in <ThemedText type="defaultSemiBold">app/(tabs)/_layout.tsx</ThemedText>{' '}
-          sets up the tab navigator.
-        </ThemedText>
-        <ExternalLink href="https://docs.expo.dev/router/introduction">
-          <ThemedText type="link">Learn more</ThemedText>
-        </ExternalLink>
-      </Collapsible>
-      <Collapsible title="Android, iOS, and web support">
-        <ThemedText>
-          You can open this project on Android, iOS, and the web. To open the web version, press{' '}
-          <ThemedText type="defaultSemiBold">w</ThemedText> in the terminal running this project.
-        </ThemedText>
-      </Collapsible>
-      <Collapsible title="Images">
-        <ThemedText>
-          For static images, you can use the <ThemedText type="defaultSemiBold">@2x</ThemedText> and{' '}
-          <ThemedText type="defaultSemiBold">@3x</ThemedText> suffixes to provide files for
-          different screen densities
-        </ThemedText>
-        <Image
-          source={require('@/assets/images/react-logo.png')}
-          style={{ width: 100, height: 100, alignSelf: 'center' }}
-        />
-        <ExternalLink href="https://reactnative.dev/docs/images">
-          <ThemedText type="link">Learn more</ThemedText>
-        </ExternalLink>
-      </Collapsible>
-      <Collapsible title="Light and dark mode components">
-        <ThemedText>
-          This template has light and dark mode support. The{' '}
-          <ThemedText type="defaultSemiBold">useColorScheme()</ThemedText> hook lets you inspect
-          what the user&apos;s current color scheme is, and so you can adjust UI colors accordingly.
-        </ThemedText>
-        <ExternalLink href="https://docs.expo.dev/develop/user-interface/color-themes/">
-          <ThemedText type="link">Learn more</ThemedText>
-        </ExternalLink>
-      </Collapsible>
-      <Collapsible title="Animations">
-        <ThemedText>
-          This template includes an example of an animated component. The{' '}
-          <ThemedText type="defaultSemiBold">components/HelloWave.tsx</ThemedText> component uses
-          the powerful{' '}
-          <ThemedText type="defaultSemiBold" style={{ fontFamily: Fonts.mono }}>
-            react-native-reanimated
-          </ThemedText>{' '}
-          library to create a waving hand animation.
-        </ThemedText>
-        {Platform.select({
-          ios: (
-            <ThemedText>
-              The <ThemedText type="defaultSemiBold">components/ParallaxScrollView.tsx</ThemedText>{' '}
-              component provides a parallax effect for the header image.
-            </ThemedText>
+type WeatherResponse = {
+  weather?: {
+    city?: string;
+    condition?: string;
+    energy_estimate?: number;
+    temperature?: number;
+  };
+};
+
+const CITIES_URL = Platform.OS === 'android' ? 'http://10.0.2.2:8000/cities' : 'http://127.0.0.1:8000/cities';
+const OPTIMIZE_URL = Platform.OS === 'android' ? 'http://10.0.2.2:8000/optimize' : 'http://127.0.0.1:8000/optimize';
+
+export default function SelectCityScreen() {
+  const [query, setQuery] = useState('Tel Aviv');
+  const [suggestions, setSuggestions] = useState<CitySuggestion[]>([]);
+  const [selected, setSelected] = useState<CitySuggestion | null>(null);
+  const [loadingCities, setLoadingCities] = useState(false);
+  const [loadingWeather, setLoadingWeather] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [weather, setWeather] = useState<WeatherResponse['weather'] | null>(null);
+
+  useEffect(() => {
+    const value = query.trim();
+    if (value.length < 2) {
+      setSuggestions([]);
+      return;
+    }
+
+    const timer = setTimeout(async () => {
+      try {
+        setLoadingCities(true);
+        setError(null);
+        const res = await fetch(`${CITIES_URL}?query=${encodeURIComponent(value)}`);
+        if (!res.ok) throw new Error(`City lookup failed (${res.status})`);
+        const data: unknown = await res.json();
+        if (!Array.isArray(data)) throw new Error('Invalid city response');
+        setSuggestions(
+          data.filter(
+            (item): item is CitySuggestion =>
+              typeof item === 'object' &&
+              item !== null &&
+              'name' in item &&
+              'country' in item &&
+              typeof (item as { name: unknown }).name === 'string' &&
+              typeof (item as { country: unknown }).country === 'string',
           ),
-        })}
-      </Collapsible>
-    </ParallaxScrollView>
+        );
+      } catch (err) {
+        setSuggestions([]);
+        setError(err instanceof Error ? err.message : 'Failed to load cities');
+      } finally {
+        setLoadingCities(false);
+      }
+    }, 350);
+
+    return () => clearTimeout(timer);
+  }, [query]);
+
+  const loadWeather = async (city: string) => {
+    try {
+      setLoadingWeather(true);
+      setError(null);
+      const res = await fetch(OPTIMIZE_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ city, devices: [] }),
+      });
+      if (!res.ok) throw new Error(`Weather fetch failed (${res.status})`);
+      const data = (await res.json()) as WeatherResponse;
+      setWeather(data.weather ?? null);
+    } catch (err) {
+      setWeather(null);
+      setError(err instanceof Error ? err.message : 'Failed to load weather');
+    } finally {
+      setLoadingWeather(false);
+    }
+  };
+
+  const onSelect = (item: CitySuggestion) => {
+    setSelected(item);
+    setQuery(item.name);
+    setSuggestions([]);
+    void loadWeather(item.name);
+  };
+
+  return (
+    <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
+      <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="always">
+        <ThemedView style={styles.card}>
+          <ThemedText type="subtitle">בחר עיר / Select City</ThemedText>
+          <ThemedText style={styles.label}>City</ThemedText>
+          <TextInput style={styles.input} value={query} onChangeText={setQuery} autoCapitalize="words" />
+
+          {loadingCities && <ActivityIndicator size="small" color="#0a7ea4" />}
+          {!!error && <ThemedText style={styles.error}>{error}</ThemedText>}
+
+          {suggestions.length > 0 && (
+            <ThemedView style={styles.dropdown}>
+              {suggestions.slice(0, 8).map((item, index) => (
+                <Pressable key={`${item.name}-${item.country}-${index}`} style={({ pressed }) => [styles.option, pressed && styles.pressed]} onPress={() => onSelect(item)}>
+                  <ThemedText>{item.name}</ThemedText>
+                  <ThemedText style={styles.country}>{item.country}</ThemedText>
+                </Pressable>
+              ))}
+            </ThemedView>
+          )}
+        </ThemedView>
+
+        <ThemedView style={styles.card}>
+          <ThemedText type="subtitle">Weather Data</ThemedText>
+          {loadingWeather ? (
+            <ActivityIndicator size="small" color="#0a7ea4" />
+          ) : selected && weather ? (
+            <ThemedView style={styles.weatherCard}>
+              <ThemedText>City: {weather.city ?? selected.name}</ThemedText>
+              <ThemedText>Temperature: {weather.temperature ?? 'N/A'}</ThemedText>
+              <ThemedText>Condition: {weather.condition ?? 'N/A'}</ThemedText>
+              <ThemedText>Estimated energy: {typeof weather.energy_estimate === 'number' ? weather.energy_estimate.toFixed(2) : 'N/A'}</ThemedText>
+            </ThemedView>
+          ) : (
+            <ThemedText style={styles.muted}>Select a city to view weather details.</ThemedText>
+          )}
+        </ThemedView>
+      </ScrollView>
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  headerImage: {
-    color: '#808080',
-    bottom: -90,
-    left: -35,
-    position: 'absolute',
-  },
-  titleContainer: {
-    flexDirection: 'row',
+  safe: { flex: 1 },
+  content: { padding: 16, gap: 14, paddingBottom: 24 },
+  card: {
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#d8e0ea',
+    backgroundColor: '#f8fbff',
+    borderRadius: 12,
+    padding: 14,
     gap: 8,
+  },
+  label: { fontSize: 14 },
+  input: {
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#c6ced8',
+    backgroundColor: '#fff',
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 10,
+    fontSize: 15,
+  },
+  dropdown: {
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#ccd6e2',
+    borderRadius: 8,
+    backgroundColor: '#fff',
+    overflow: 'hidden',
+  },
+  option: {
+    paddingHorizontal: 10,
+    paddingVertical: 9,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#e6edf5',
+  },
+  pressed: { opacity: 0.8 },
+  country: { opacity: 0.7, fontSize: 12 },
+  error: { color: '#a12222' },
+  muted: { opacity: 0.7 },
+  weatherCard: {
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#a9c6e7',
+    backgroundColor: '#eef5ff',
+    borderRadius: 10,
+    padding: 10,
+    gap: 4,
   },
 });

@@ -1,24 +1,13 @@
-import { useEffect, useState } from 'react';
-import {
-  ActivityIndicator,
-  Alert,
-  Platform,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  Switch,
-  Text,
-  TextInput,
-} from 'react-native';
+import { useRouter } from 'expo-router';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { ActivityIndicator, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 
-/**
- * Backend device shape (POST body). No `id` — the API only needs these fields.
- */
-export type ApiDevicePayload = {
+type ApiDevice = {
+  id: string;
   name: string;
   power: number;
   duration: number;
@@ -28,590 +17,1734 @@ export type ApiDevicePayload = {
   end_time: string;
 };
 
-/** Full shape returned by the updated backend /optimize response. */
-export type CannotRunItem = {
-  device: ApiDevicePayload;
-  reason: string;
+type EnergyDataItem = {
+  voltage?: number;
+  current?: number;
+  soc?: number;
 };
 
-export type ScenarioResult = {
-  name: string;
-  can_run: ApiDevicePayload[];
-  cannot_run: CannotRunItem[];
-  remaining_energy: number;
+type OptimizeWeather = {
+  city?: string;
+  condition?: string;
+  energy_estimate?: number;
+  temperature?: number | null;
 };
-
-export type ForecastHourResult = {
-  hour: string;
-  can_run: ApiDevicePayload[];
-  remaining_energy: number;
-};
-
-export type OptimizeApiResponse = {
-  scenarios: ScenarioResult[];
-  forecast: ForecastHourResult[];
-  alerts: string[];
-  weather: {
-    city: string;
-    condition: string;
-    energy_estimate: number;
-  };
-};
-
-/**
- * FastAPI `/optimize` (port 8000).
- * Fix: On Android emulator, `127.0.0.1` is the emulator itself, not your PC — use 10.0.2.2.
- * iOS Simulator / Expo Web on same machine: 127.0.0.1 is correct.
- * Physical device: replace with your computer's LAN IP (e.g. 192.168.x.x).
- */
-const OPTIMIZE_URL =
-  Platform.OS === 'android'
-    ? 'http://10.0.2.2:8000/optimize'
-    : 'http://127.0.0.1:8000/optimize';
-const CITIES_URL =
-  Platform.OS === 'android'
-    ? 'http://10.0.2.2:8000/cities'
-    : 'http://127.0.0.1:8000/cities';
 
 type CitySuggestion = {
   name: string;
   country: string;
 };
 
-/** One saved device row in the UI list (includes local `id` for React keys). */
-export type DeviceRow = {
-  id: string;
-  name: string;
-  power_kw: number;
-  duration_minutes: number;
-  priority: number;
-  mandatory: boolean;
-  start_time: string;
-  end_time: string;
+type DeviceDecision = {
+  device: ApiDevice;
+  deviceEnergyWh: number;
+  reason?: string;
+  constraint?: 'inverter_power' | 'available_energy';
+  remainingEnergyWhAtBlock?: number;
 };
 
-function toApiDevice(row: DeviceRow): ApiDevicePayload {
-  return {
-    name: row.name,
-    power: row.power_kw,
-    duration: row.duration_minutes,
-    priority: row.priority,
-    essential: row.mandatory,
-    start_time: row.start_time,
-    end_time: row.end_time,
-  };
-}
+type AlternativeCombination = {
+  id: string;
+  blockedDevice: ApiDevice;
+  constraint: 'inverter_power' | 'available_energy';
+  removeDevices: ApiDevice[];
+  addDevices: ApiDevice[];
+  summary: string;
+};
 
-/** One line per API device — used under Active / Rejected lists. */
-function ApiDeviceRow({ device, index }: { device: ApiDevicePayload; index: number }) {
+type DurationReductionSuggestion = {
+  id: string;
+  device: ApiDevice;
+  originalDurationMinutes: number;
+  suggestedDurationMinutes: number;
+  reduceByMinutes: number;
+  suggestedEnergyWh: number;
+  summary: string;
+};
+
+type InverterPowerSet = {
+  id: string;
+  devices: ApiDevice[];
+  totalPowerW: number;
+  essentialCount: number;
+  optionalCount: number;
+  summary: string;
+};
+
+type InverterPowerCatalog = {
+  essentialOnly: InverterPowerSet[];
+  optionalOnly: InverterPowerSet[];
+  essentialWithOptional: InverterPowerSet[];
+  invalid: InverterPowerSet[];
+  tooManyDevices: boolean;
+};
+
+type EnergyCombinationSet = {
+  id: string;
+  devices: ApiDevice[];
+  totalEnergyWh: number;
+  essentialCount: number;
+  optionalCount: number;
+  kind: 'essential_only' | 'essential_with_optional' | 'invalid';
+  summary: string;
+};
+
+type EnergyCombinationCatalog = {
+  essentialOnly: EnergyCombinationSet[];
+  essentialWithOptional: EnergyCombinationSet[];
+  invalid: EnergyCombinationSet[];
+  tooManyDevices: boolean;
+  noEnergyAvailable: boolean;
+};
+
+type RunnableCombination = {
+  id: string;
+  devices: ApiDevice[];
+  totalPowerW: number;
+  totalEnergyWh: number;
+  essentialCount: number;
+  optionalCount: number;
+  category: 'essential_only' | 'optional_only' | 'essential_with_optional';
+  summary: string;
+};
+
+type RunnableCombinationCatalog = {
+  essentialOnly: RunnableCombination[];
+  optionalOnly: RunnableCombination[];
+  essentialWithOptional: RunnableCombination[];
+  tooManyDevices: boolean;
+  noEnergyAvailable: boolean;
+};
+
+const DEFAULT_INVERTER_MAX_POWER_W = 2000;
+const MAX_INVERTER_ENUM_DEVICES = 14;
+const MAX_ENERGY_ENUM_DEVICES = 14;
+const INITIAL_INVERTER_COMBOS_SHOWN = 4;
+const INITIAL_ENERGY_COMBOS_SHOWN = 4;
+const INITIAL_RUNNABLE_COMBOS_SHOWN = 4;
+
+type InverterComboListProps = {
+  combos: InverterPowerSet[];
+  variant: 'valid' | 'invalid';
+  inverterMaxPowerW: number;
+  showAll: boolean;
+  onToggleShowAll: () => void;
+};
+
+type EnergyComboListProps = {
+  combos: EnergyCombinationSet[];
+  variant: 'valid' | 'invalid';
+  availableEnergyWh: number;
+  showAll: boolean;
+  onToggleShowAll: () => void;
+};
+
+function EnergyComboList({ combos, variant, availableEnergyWh, showAll, onToggleShowAll }: EnergyComboListProps) {
+  if (combos.length === 0) {
+    return null;
+  }
+
+  const visibleCombos = showAll ? combos : combos.slice(0, INITIAL_ENERGY_COMBOS_SHOWN);
+  const hiddenCount = Math.max(0, combos.length - INITIAL_ENERGY_COMBOS_SHOWN);
+  const frameStyle = variant === 'valid' ? styles.energyComboFrameValid : styles.energyComboFrameInvalid;
+  const titleStyle = variant === 'valid' ? styles.energyValidText : styles.energyInvalidText;
+
   return (
-    <ThemedView style={styles.deviceRow}>
-      <ThemedText type="defaultSemiBold" style={styles.deviceName}>
-        {index + 1}. {device.name}
-      </ThemedText>
-      <ThemedText style={styles.deviceMeta}>
-        {device.power} kWh · priority {device.priority} · {device.start_time}-{device.end_time}
-      </ThemedText>
+    <ThemedView style={styles.inverterComboList}>
+      {visibleCombos.map((combo) => (
+        <ThemedView key={`energy-${variant}-${combo.id}`} style={frameStyle}>
+          <ThemedText type="defaultSemiBold" style={titleStyle}>
+            {combo.summary}
+          </ThemedText>
+          <ThemedText style={styles.muted}>
+            {combo.essentialCount} required · {combo.optionalCount} optional · {combo.devices.length} device
+            {combo.devices.length === 1 ? '' : 's'}
+            {variant === 'valid'
+              ? ` · headroom ${(availableEnergyWh - combo.totalEnergyWh).toFixed(0)} Wh`
+              : ` · exceeds by ${(combo.totalEnergyWh - availableEnergyWh).toFixed(0)} Wh`}
+          </ThemedText>
+        </ThemedView>
+      ))}
+
+      {!showAll && hiddenCount > 0 ? (
+        <Pressable
+          style={({ pressed }) => [styles.showAllButton, pressed && styles.buttonPressed]}
+          onPress={onToggleShowAll}
+        >
+          <Text style={styles.showAllButtonText}>Show all ({hiddenCount} more)</Text>
+        </Pressable>
+      ) : null}
+
+      {showAll && combos.length > INITIAL_ENERGY_COMBOS_SHOWN ? (
+        <Pressable
+          style={({ pressed }) => [styles.showAllButton, pressed && styles.buttonPressed]}
+          onPress={onToggleShowAll}
+        >
+          <Text style={styles.showAllButtonText}>Show less</Text>
+        </Pressable>
+      ) : null}
     </ThemedView>
   );
 }
 
-/**
- * Device entry + optimization home screen.
- * Form fields are controlled inputs; the list is the accumulated `devices` state.
- */
-export default function DeviceOptimizerScreen() {
-  // --- State -----------------------------------------------------------------
-  // `devices`: list of devices the user has added (shown below the form).
-  const [devices, setDevices] = useState<DeviceRow[]>([]);
+type RunnableComboListProps = {
+  combos: RunnableCombination[];
+  selectedId: string | null;
+  inverterMaxPowerW: number;
+  availableEnergyWh: number;
+  showAll: boolean;
+  onToggleShowAll: () => void;
+  onSelect: (comboId: string) => void;
+};
 
-  // Form fields: separate state per input so each keystroke/toggle re-renders correctly.
-  // Numbers are kept as strings while typing; we parse them when adding a device.
-  const [name, setName] = useState('');
-  const [powerKw, setPowerKw] = useState('');
-  const [durationMinutes, setDurationMinutes] = useState('');
-  const [priority, setPriority] = useState('3');
-  const [mandatory, setMandatory] = useState(false);
-  const [startTime, setStartTime] = useState('08:00');
-  const [endTime, setEndTime] = useState('18:00');
+function RunnableComboList({
+  combos,
+  selectedId,
+  inverterMaxPowerW,
+  availableEnergyWh,
+  showAll,
+  onToggleShowAll,
+  onSelect,
+}: RunnableComboListProps) {
+  if (combos.length === 0) {
+    return null;
+  }
+
+  const visibleCombos = showAll ? combos : combos.slice(0, INITIAL_RUNNABLE_COMBOS_SHOWN);
+  const hiddenCount = Math.max(0, combos.length - INITIAL_RUNNABLE_COMBOS_SHOWN);
+
+  return (
+    <ThemedView style={styles.inverterComboList}>
+      {visibleCombos.map((combo) => {
+        const isSelected = selectedId === combo.id;
+        return (
+          <Pressable
+            key={`runnable-${combo.id}`}
+            style={({ pressed }) => [
+              styles.runnableComboFrame,
+              isSelected && styles.runnableComboFrameSelected,
+              pressed && styles.buttonPressed,
+            ]}
+            onPress={() => onSelect(combo.id)}
+          >
+            <ThemedText type="defaultSemiBold" style={styles.runnableComboText}>
+              {isSelected ? '✓ ' : ''}
+              {combo.summary}
+            </ThemedText>
+            <ThemedText style={styles.muted}>
+              {combo.essentialCount} required · {combo.optionalCount} optional · headroom{' '}
+              {(inverterMaxPowerW - combo.totalPowerW).toFixed(0)} W /{' '}
+              {(availableEnergyWh - combo.totalEnergyWh).toFixed(0)} Wh
+            </ThemedText>
+            <Text style={styles.selectComboButtonText}>{isSelected ? 'Selected' : 'Select to run'}</Text>
+          </Pressable>
+        );
+      })}
+
+      {!showAll && hiddenCount > 0 ? (
+        <Pressable
+          style={({ pressed }) => [styles.showAllButton, pressed && styles.buttonPressed]}
+          onPress={onToggleShowAll}
+        >
+          <Text style={styles.showAllButtonText}>Show all ({hiddenCount} more)</Text>
+        </Pressable>
+      ) : null}
+
+      {showAll && combos.length > INITIAL_RUNNABLE_COMBOS_SHOWN ? (
+        <Pressable
+          style={({ pressed }) => [styles.showAllButton, pressed && styles.buttonPressed]}
+          onPress={onToggleShowAll}
+        >
+          <Text style={styles.showAllButtonText}>Show less</Text>
+        </Pressable>
+      ) : null}
+    </ThemedView>
+  );
+}
+
+function InverterComboList({ combos, variant, inverterMaxPowerW, showAll, onToggleShowAll }: InverterComboListProps) {
+  if (combos.length === 0) {
+    return null;
+  }
+
+  const visibleCombos = showAll ? combos : combos.slice(0, INITIAL_INVERTER_COMBOS_SHOWN);
+  const hiddenCount = Math.max(0, combos.length - INITIAL_INVERTER_COMBOS_SHOWN);
+  const frameStyle = variant === 'valid' ? styles.inverterComboFrameValid : styles.inverterComboFrameInvalid;
+  const titleStyle = variant === 'valid' ? styles.inverterValidText : styles.inverterInvalidText;
+
+  return (
+    <ThemedView style={styles.inverterComboList}>
+      {visibleCombos.map((combo, index) => (
+        <ThemedView key={`${variant}-${combo.id}`} style={frameStyle}>
+          <ThemedText type="defaultSemiBold" style={titleStyle}>
+            {combo.summary}
+          </ThemedText>
+          <ThemedText style={styles.muted}>
+            {combo.essentialCount} required · {combo.optionalCount} optional · {combo.devices.length} device
+            {combo.devices.length === 1 ? '' : 's'}
+            {variant === 'valid'
+              ? ` · headroom ${(inverterMaxPowerW - combo.totalPowerW).toFixed(0)} W`
+              : ` · exceeds by ${(combo.totalPowerW - inverterMaxPowerW).toFixed(0)} W`}
+          </ThemedText>
+        </ThemedView>
+      ))}
+
+      {!showAll && hiddenCount > 0 ? (
+        <Pressable
+          style={({ pressed }) => [styles.showAllButton, pressed && styles.buttonPressed]}
+          onPress={onToggleShowAll}
+        >
+          <Text style={styles.showAllButtonText}>Show all ({hiddenCount} more)</Text>
+        </Pressable>
+      ) : null}
+
+      {showAll && combos.length > INITIAL_INVERTER_COMBOS_SHOWN ? (
+        <Pressable
+          style={({ pressed }) => [styles.showAllButton, pressed && styles.buttonPressed]}
+          onPress={onToggleShowAll}
+        >
+          <Text style={styles.showAllButtonText}>Show less</Text>
+        </Pressable>
+      ) : null}
+    </ThemedView>
+  );
+}
+
+function deviceEnergyWh(device: ApiDevice): number {
+  return device.power * (device.duration / 60);
+}
+
+function energyForDuration(device: ApiDevice, durationMinutes: number): number {
+  return device.power * (durationMinutes / 60);
+}
+
+function maxRunnableDurationMinutes(device: ApiDevice, availableEnergyWh: number): number {
+  if (device.power <= 0 || availableEnergyWh <= 0) return 0;
+  return Math.floor((availableEnergyWh / device.power) * 60);
+}
+
+function buildDurationReductionSuggestions(blocked: DeviceDecision[]): DurationReductionSuggestion[] {
+  const suggestions: DurationReductionSuggestion[] = [];
+
+  for (const item of blocked) {
+    if (item.constraint !== 'available_energy') continue;
+
+    const remainingEnergyWh = item.remainingEnergyWhAtBlock ?? 0;
+    const originalDurationMinutes = item.device.duration;
+    const maxDurationMinutes = maxRunnableDurationMinutes(item.device, remainingEnergyWh);
+
+    if (maxDurationMinutes <= 0) {
+      const deficitWh = Math.max(0, item.deviceEnergyWh - remainingEnergyWh);
+      suggestions.push({
+        id: `${item.device.id}|none`,
+        device: item.device,
+        originalDurationMinutes,
+        suggestedDurationMinutes: 0,
+        reduceByMinutes: originalDurationMinutes,
+        suggestedEnergyWh: 0,
+        summary: `Not enough energy (${deficitWh.toFixed(0)} Wh short) to run even 1 minute.`,
+      });
+      continue;
+    }
+
+    if (maxDurationMinutes >= originalDurationMinutes) continue;
+
+    const reduceByMinutes = originalDurationMinutes - maxDurationMinutes;
+    const suggestedEnergyWh = energyForDuration(item.device, maxDurationMinutes);
+    suggestions.push({
+      id: `${item.device.id}|${maxDurationMinutes}`,
+      device: item.device,
+      originalDurationMinutes,
+      suggestedDurationMinutes: maxDurationMinutes,
+      reduceByMinutes,
+      suggestedEnergyWh,
+      summary: `Reduce usage by ${reduceByMinutes} min (${originalDurationMinutes} → ${maxDurationMinutes} min) to run within available energy (${suggestedEnergyWh.toFixed(0)} Wh).`,
+    });
+  }
+
+  return suggestions;
+}
+
+function getConstraintKind(reason?: string): 'inverter_power' | 'available_energy' | null {
+  if (reason?.includes('inverter limit')) return 'inverter_power';
+  if (
+    reason?.includes('available energy') ||
+    reason?.includes('battery capacity') ||
+    reason?.includes('Not enough')
+  ) {
+    return 'available_energy';
+  }
+  return null;
+}
+
+function combinationFits(devices: ApiDevice[], availableEnergyWh: number, inverterMaxPowerW: number): boolean {
+  const totalPower = devices.reduce((sum, device) => sum + device.power, 0);
+  const totalEnergy = devices.reduce((sum, device) => sum + deviceEnergyWh(device), 0);
+  return totalPower <= inverterMaxPowerW && totalEnergy <= availableEnergyWh;
+}
+
+function formatDeviceList(devices: ApiDevice[]): string {
+  return devices.map((device) => device.name).join(' + ');
+}
+
+function combinationTotalPowerW(devices: ApiDevice[]): number {
+  return devices.reduce((sum, device) => sum + device.power, 0);
+}
+
+function buildDevicesCatalogSignature(devices: ApiDevice[]): string {
+  return devices
+    .map((device) => `${device.id}:${device.power}:${device.duration}:${device.essential}`)
+    .sort()
+    .join('|');
+}
+
+function formatInverterCombinationSummary(devices: ApiDevice[]): string {
+  const essentialParts = devices
+    .filter((device) => device.essential)
+    .map((device) => `${device.name} (${device.power} W)`);
+  const optionalParts = devices
+    .filter((device) => !device.essential)
+    .map((device) => `${device.name} (${device.power} W)`);
+
+  const segments: string[] = [];
+  if (essentialParts.length > 0) {
+    segments.push(`Required: ${essentialParts.join(', ')}`);
+  }
+  if (optionalParts.length > 0) {
+    segments.push(`Optional: ${optionalParts.join(', ')}`);
+  }
+
+  const totalPowerW = combinationTotalPowerW(devices);
+  return `${segments.join(' · ')} — ${totalPowerW.toFixed(0)} W`;
+}
+
+function buildInverterPowerCatalog(devices: ApiDevice[], inverterMaxPowerW: number): InverterPowerCatalog {
+  if (devices.length === 0) {
+    return {
+      essentialOnly: [],
+      optionalOnly: [],
+      essentialWithOptional: [],
+      invalid: [],
+      tooManyDevices: false,
+    };
+  }
+  if (devices.length > MAX_INVERTER_ENUM_DEVICES) {
+    return {
+      essentialOnly: [],
+      optionalOnly: [],
+      essentialWithOptional: [],
+      invalid: [],
+      tooManyDevices: true,
+    };
+  }
+
+  const essentialOnly: InverterPowerSet[] = [];
+  const optionalOnly: InverterPowerSet[] = [];
+  const essentialWithOptional: InverterPowerSet[] = [];
+  const invalid: InverterPowerSet[] = [];
+  const subsetCount = 1 << devices.length;
+
+  for (let mask = 1; mask < subsetCount; mask += 1) {
+    const subset: ApiDevice[] = [];
+    for (let index = 0; index < devices.length; index += 1) {
+      if (mask & (1 << index)) {
+        subset.push(devices[index]);
+      }
+    }
+    const totalPowerW = combinationTotalPowerW(subset);
+    const essentialCount = subset.filter((device) => device.essential).length;
+    const optionalCount = subset.length - essentialCount;
+    const id = subset
+      .map((device) => device.id)
+      .sort()
+      .join('+');
+    const entry: InverterPowerSet = {
+      id,
+      devices: subset,
+      totalPowerW,
+      essentialCount,
+      optionalCount,
+      summary: formatInverterCombinationSummary(subset),
+    };
+
+    if (totalPowerW > inverterMaxPowerW) {
+      invalid.push(entry);
+      continue;
+    }
+
+    if (optionalCount === 0) {
+      essentialOnly.push(entry);
+    } else if (essentialCount === 0) {
+      optionalOnly.push(entry);
+    } else {
+      essentialWithOptional.push(entry);
+    }
+  }
+
+  const sortBySizeThenPower = (a: InverterPowerSet, b: InverterPowerSet) => {
+    if (a.devices.length !== b.devices.length) {
+      return a.devices.length - b.devices.length;
+    }
+    return a.totalPowerW - b.totalPowerW;
+  };
+
+  essentialOnly.sort(sortBySizeThenPower);
+  optionalOnly.sort(sortBySizeThenPower);
+  essentialWithOptional.sort(sortBySizeThenPower);
+  invalid.sort((a, b) => b.totalPowerW - a.totalPowerW);
+
+  return {
+    essentialOnly,
+    optionalOnly,
+    essentialWithOptional,
+    invalid,
+    tooManyDevices: false,
+  };
+}
+
+function combinationTotalEnergyWh(devices: ApiDevice[]): number {
+  return devices.reduce((sum, device) => sum + deviceEnergyWh(device), 0);
+}
+
+function passesEssentialOptionalRule(devices: ApiDevice[]): boolean {
+  const hasOptional = devices.some((device) => !device.essential);
+  if (!hasOptional) {
+    return true;
+  }
+  return devices.some((device) => device.essential);
+}
+
+function formatEnergyCombinationSummary(devices: ApiDevice[]): string {
+  const essentialParts = devices
+    .filter((device) => device.essential)
+    .map((device) => `${device.name} (${device.duration} min, ${deviceEnergyWh(device).toFixed(0)} Wh)`);
+  const optionalParts = devices
+    .filter((device) => !device.essential)
+    .map((device) => `${device.name} (${device.duration} min, ${deviceEnergyWh(device).toFixed(0)} Wh)`);
+
+  const segments: string[] = [];
+  if (essentialParts.length > 0) {
+    segments.push(`Required: ${essentialParts.join(', ')}`);
+  }
+  if (optionalParts.length > 0) {
+    segments.push(`Optional: ${optionalParts.join(', ')}`);
+  }
+
+  const totalEnergyWh = combinationTotalEnergyWh(devices);
+  return `${segments.join(' · ')} — ${totalEnergyWh.toFixed(0)} Wh`;
+}
+
+function buildEnergyCombinationCatalog(
+  devices: ApiDevice[],
+  availableEnergyWh: number,
+): EnergyCombinationCatalog {
+  if (devices.length === 0) {
+    return {
+      essentialOnly: [],
+      essentialWithOptional: [],
+      invalid: [],
+      tooManyDevices: false,
+      noEnergyAvailable: availableEnergyWh <= 0,
+    };
+  }
+  if (availableEnergyWh <= 0) {
+    return {
+      essentialOnly: [],
+      essentialWithOptional: [],
+      invalid: [],
+      tooManyDevices: false,
+      noEnergyAvailable: true,
+    };
+  }
+  if (devices.length > MAX_ENERGY_ENUM_DEVICES) {
+    return {
+      essentialOnly: [],
+      essentialWithOptional: [],
+      invalid: [],
+      tooManyDevices: true,
+      noEnergyAvailable: false,
+    };
+  }
+
+  const essentialOnly: EnergyCombinationSet[] = [];
+  const essentialWithOptional: EnergyCombinationSet[] = [];
+  const invalid: EnergyCombinationSet[] = [];
+  const subsetCount = 1 << devices.length;
+
+  for (let mask = 1; mask < subsetCount; mask += 1) {
+    const subset: ApiDevice[] = [];
+    for (let index = 0; index < devices.length; index += 1) {
+      if (mask & (1 << index)) {
+        subset.push(devices[index]);
+      }
+    }
+
+    const totalEnergyWh = combinationTotalEnergyWh(subset);
+    const essentialCount = subset.filter((device) => device.essential).length;
+    const optionalCount = subset.length - essentialCount;
+    const id = subset
+      .map((device) => device.id)
+      .sort()
+      .join('+');
+    const fitsEnergy = totalEnergyWh <= availableEnergyWh;
+    const fitsEssentialRule = passesEssentialOptionalRule(subset);
+
+    if (!fitsEnergy || !fitsEssentialRule) {
+      const reasons: string[] = [];
+      if (!fitsEnergy) {
+        reasons.push(`exceeds available energy by ${(totalEnergyWh - availableEnergyWh).toFixed(0)} Wh`);
+      }
+      if (!fitsEssentialRule) {
+        reasons.push('optional devices must run with at least one required device');
+      }
+      invalid.push({
+        id,
+        devices: subset,
+        totalEnergyWh,
+        essentialCount,
+        optionalCount,
+        kind: 'invalid',
+        summary: `${formatEnergyCombinationSummary(subset)} (${reasons.join('; ')})`,
+      });
+      continue;
+    }
+
+    const entry: EnergyCombinationSet = {
+      id,
+      devices: subset,
+      totalEnergyWh,
+      essentialCount,
+      optionalCount,
+      kind: optionalCount === 0 ? 'essential_only' : 'essential_with_optional',
+      summary: formatEnergyCombinationSummary(subset),
+    };
+
+    if (optionalCount === 0) {
+      essentialOnly.push(entry);
+    } else {
+      essentialWithOptional.push(entry);
+    }
+  }
+
+  const sortEnergySets = (a: EnergyCombinationSet, b: EnergyCombinationSet) => {
+    if (a.devices.length !== b.devices.length) {
+      return a.devices.length - b.devices.length;
+    }
+    return a.totalEnergyWh - b.totalEnergyWh;
+  };
+
+  essentialOnly.sort(sortEnergySets);
+  essentialWithOptional.sort(sortEnergySets);
+  invalid.sort((a, b) => b.totalEnergyWh - a.totalEnergyWh);
+
+  return {
+    essentialOnly,
+    essentialWithOptional,
+    invalid,
+    tooManyDevices: false,
+    noEnergyAvailable: false,
+  };
+}
+
+function formatRunnableCombinationSummary(devices: ApiDevice[]): string {
+  const powerSummary = formatInverterCombinationSummary(devices);
+  const totalEnergyWh = combinationTotalEnergyWh(devices);
+  return `${powerSummary} · ${totalEnergyWh.toFixed(0)} Wh energy`;
+}
+
+function buildRunnableCombinationCatalog(
+  devices: ApiDevice[],
+  inverterMaxPowerW: number,
+  availableEnergyWh: number,
+): RunnableCombinationCatalog {
+  if (devices.length === 0) {
+    return {
+      essentialOnly: [],
+      optionalOnly: [],
+      essentialWithOptional: [],
+      tooManyDevices: false,
+      noEnergyAvailable: availableEnergyWh <= 0,
+    };
+  }
+  if (availableEnergyWh <= 0) {
+    return {
+      essentialOnly: [],
+      optionalOnly: [],
+      essentialWithOptional: [],
+      tooManyDevices: false,
+      noEnergyAvailable: true,
+    };
+  }
+  if (devices.length > MAX_INVERTER_ENUM_DEVICES) {
+    return {
+      essentialOnly: [],
+      optionalOnly: [],
+      essentialWithOptional: [],
+      tooManyDevices: true,
+      noEnergyAvailable: false,
+    };
+  }
+
+  const essentialOnly: RunnableCombination[] = [];
+  const optionalOnly: RunnableCombination[] = [];
+  const essentialWithOptional: RunnableCombination[] = [];
+  const subsetCount = 1 << devices.length;
+
+  for (let mask = 1; mask < subsetCount; mask += 1) {
+    const subset: ApiDevice[] = [];
+    for (let index = 0; index < devices.length; index += 1) {
+      if (mask & (1 << index)) {
+        subset.push(devices[index]);
+      }
+    }
+
+    const totalPowerW = combinationTotalPowerW(subset);
+    const totalEnergyWh = combinationTotalEnergyWh(subset);
+    const essentialCount = subset.filter((device) => device.essential).length;
+    const optionalCount = subset.length - essentialCount;
+    const id = subset
+      .map((device) => device.id)
+      .sort()
+      .join('+');
+
+    const fitsInverter = totalPowerW <= inverterMaxPowerW;
+    const fitsEnergy = totalEnergyWh <= availableEnergyWh && passesEssentialOptionalRule(subset);
+    if (!fitsInverter || !fitsEnergy) {
+      continue;
+    }
+
+    const entry: RunnableCombination = {
+      id,
+      devices: subset,
+      totalPowerW,
+      totalEnergyWh,
+      essentialCount,
+      optionalCount,
+      category:
+        optionalCount === 0
+          ? 'essential_only'
+          : essentialCount === 0
+            ? 'optional_only'
+            : 'essential_with_optional',
+      summary: formatRunnableCombinationSummary(subset),
+    };
+
+    if (optionalCount === 0) {
+      essentialOnly.push(entry);
+    } else if (essentialCount === 0) {
+      optionalOnly.push(entry);
+    } else {
+      essentialWithOptional.push(entry);
+    }
+  }
+
+  const sortRunnable = (a: RunnableCombination, b: RunnableCombination) => {
+    if (a.devices.length !== b.devices.length) {
+      return a.devices.length - b.devices.length;
+    }
+    return a.totalEnergyWh - b.totalEnergyWh;
+  };
+
+  essentialOnly.sort(sortRunnable);
+  optionalOnly.sort(sortRunnable);
+  essentialWithOptional.sort(sortRunnable);
+
+  return {
+    essentialOnly,
+    optionalOnly,
+    essentialWithOptional,
+    tooManyDevices: false,
+    noEnergyAvailable: false,
+  };
+}
+
+function expandBlockedDevicesIntoCombination(
+  baseDevices: ApiDevice[],
+  blockedPool: ApiDevice[],
+  availableEnergyWh: number,
+  inverterMaxPowerW: number,
+  mustInclude?: ApiDevice,
+): ApiDevice[] {
+  const added: ApiDevice[] = [];
+  let current = [...baseDevices];
+  const sortedPool = [...blockedPool].sort((a, b) => deviceEnergyWh(a) - deviceEnergyWh(b));
+
+  if (mustInclude && !current.some((device) => device.id === mustInclude.id)) {
+    if (combinationFits([...current, mustInclude], availableEnergyWh, inverterMaxPowerW)) {
+      current.push(mustInclude);
+      added.push(mustInclude);
+    } else {
+      return [];
+    }
+  }
+
+  for (const device of sortedPool) {
+    if (current.some((item) => item.id === device.id)) continue;
+    if (!combinationFits([...current, device], availableEnergyWh, inverterMaxPowerW)) continue;
+    current.push(device);
+    added.push(device);
+  }
+
+  return added;
+}
+
+function formatAlternativeSummary(removeDevices: ApiDevice[], addDevices: ApiDevice[]): string {
+  const addNames = addDevices.map((device) => device.name).join(', ');
+  if (removeDevices.length === 0) {
+    return `You can add: ${addNames}`;
+  }
+  const removeNames = removeDevices.map((device) => device.name).join(', ');
+  return `Remove ${removeNames} to run: ${addNames}`;
+}
+
+function buildAlternativeCombinations(
+  allowed: DeviceDecision[],
+  blocked: DeviceDecision[],
+  availableEnergyWh: number,
+  inverterMaxPowerW: number,
+  activePowerW: number,
+  remainingEnergyWh: number,
+): AlternativeCombination[] {
+  const allowedDevices = allowed.map((item) => item.device);
+  const removableOptional = allowedDevices.filter((device) => !device.essential);
+  const constraintBlocked = blocked.filter((item) => getConstraintKind(item.reason) !== null);
+  const blockedPool = constraintBlocked.map((item) => item.device);
+
+  if (constraintBlocked.length === 0) {
+    return [];
+  }
+
+  const suggestions: AlternativeCombination[] = [];
+  const seen = new Set<string>();
+
+  const pushSuggestion = (
+    blockedDevice: ApiDevice,
+    constraint: 'inverter_power' | 'available_energy',
+    removeDevices: ApiDevice[],
+    addDevices: ApiDevice[],
+  ) => {
+    if (addDevices.length === 0) return;
+    const key = [
+      blockedDevice.id,
+      removeDevices
+        .map((device) => device.id)
+        .sort()
+        .join('+'),
+      addDevices
+        .map((device) => device.id)
+        .sort()
+        .join('+'),
+    ].join('|');
+    if (seen.has(key)) return;
+    seen.add(key);
+    suggestions.push({
+      id: key,
+      blockedDevice,
+      constraint,
+      removeDevices,
+      addDevices,
+      summary: formatAlternativeSummary(removeDevices, addDevices),
+    });
+  };
+
+  for (const blockedItem of constraintBlocked) {
+    const target = blockedItem.device;
+    const constraint = getConstraintKind(blockedItem.reason)!;
+
+    for (const remove of removableOptional) {
+      const base = allowedDevices.filter((device) => device.id !== remove.id);
+      const addDevices = expandBlockedDevicesIntoCombination(
+        base,
+        blockedPool,
+        availableEnergyWh,
+        inverterMaxPowerW,
+        target,
+      );
+      pushSuggestion(target, constraint, [remove], addDevices);
+    }
+
+    for (let i = 0; i < removableOptional.length; i += 1) {
+      for (let j = i + 1; j < removableOptional.length; j += 1) {
+        const removeDevices = [removableOptional[i], removableOptional[j]];
+        const removeIds = new Set(removeDevices.map((device) => device.id));
+        const base = allowedDevices.filter((device) => !removeIds.has(device.id));
+        const addDevices = expandBlockedDevicesIntoCombination(
+          base,
+          blockedPool,
+          availableEnergyWh,
+          inverterMaxPowerW,
+          target,
+        );
+        pushSuggestion(target, constraint, removeDevices, addDevices);
+      }
+    }
+
+    if (
+      target.power <= inverterMaxPowerW - activePowerW &&
+      deviceEnergyWh(target) <= remainingEnergyWh
+    ) {
+      pushSuggestion(target, constraint, [], [target]);
+    }
+  }
+
+  const powerSlack = inverterMaxPowerW - activePowerW;
+  const energySlack = remainingEnergyWh;
+  for (const blockedItem of constraintBlocked) {
+    const device = blockedItem.device;
+    if (device.power > powerSlack || deviceEnergyWh(device) > energySlack) continue;
+    if (allowedDevices.some((allowedDevice) => allowedDevice.id === device.id)) continue;
+    pushSuggestion(device, getConstraintKind(blockedItem.reason)!, [], [device]);
+  }
+
+  return suggestions.slice(0, 12);
+}
+
+const DEVICES_URL = Platform.OS === 'android' ? 'http://10.0.2.2:8000/devices' : 'http://127.0.0.1:8000/devices';
+const ENERGY_LATEST_URL = Platform.OS === 'android' ? 'http://10.0.2.2:8000/energy-data/latest' : 'http://127.0.0.1:8000/energy-data/latest';
+const CITIES_URL = Platform.OS === 'android' ? 'http://10.0.2.2:8000/cities' : 'http://127.0.0.1:8000/cities';
+const OPTIMIZE_URL = Platform.OS === 'android' ? 'http://10.0.2.2:8000/optimize' : 'http://127.0.0.1:8000/optimize';
+const SOLAR_SYSTEM_URL =
+  Platform.OS === 'android' ? 'http://10.0.2.2:8000/solar-system' : 'http://127.0.0.1:8000/solar-system';
+
+type SolarSystemProfileResponse = {
+  battery_capacity_wh: number;
+  inverter_max_power_w: number;
+};
+
+function optimizeDevices(
+  devices: ApiDevice[],
+  availableEnergyWh: number,
+  inverterMaxPowerW: number,
+) {
+  let remainingEnergyWh = availableEnergyWh;
+  let activePowerW = 0;
+  const allowed: DeviceDecision[] = [];
+  const blocked: DeviceDecision[] = [];
+  const mandatoryDevices = devices.filter((d) => d.essential);
+  const optionalDevices = devices.filter((d) => !d.essential);
+  let totalDeviceEnergyWh = 0;
+  let mandatoryEnergyWh = 0;
+  let optionalEnergyWh = 0;
+
+  const evaluateDevice = (device: ApiDevice, category: 'mandatory' | 'optional') => {
+    const usageHours = device.duration / 60;
+    const requiredEnergyWh = device.power * usageHours;
+    const projectedPowerW = activePowerW + device.power;
+
+    console.log('[Optimization] Device check', {
+      device: device.name,
+      category,
+      power_w: device.power,
+      usage_time_hours: usageHours,
+      device_energy_wh: requiredEnergyWh,
+      active_power_w: activePowerW,
+      projected_power_w: projectedPowerW,
+      inverter_max_power_w: inverterMaxPowerW,
+      remaining_before_wh: remainingEnergyWh,
+    });
+
+    if (projectedPowerW > inverterMaxPowerW) {
+      blocked.push({
+        device,
+        deviceEnergyWh: requiredEnergyWh,
+        reason: `Total active power (${projectedPowerW.toFixed(0)} W) exceeds inverter limit (${inverterMaxPowerW.toFixed(0)} W).`,
+        constraint: 'inverter_power',
+      });
+      console.log('[Optimization] Decision', {
+        device: device.name,
+        decision: 'blocked',
+        category,
+        reason: 'inverter_power',
+      });
+      return;
+    }
+
+    if (requiredEnergyWh > remainingEnergyWh) {
+      blocked.push({
+        device,
+        deviceEnergyWh: requiredEnergyWh,
+        reason: device.essential
+          ? 'Not enough available energy'
+          : 'Exceeds remaining battery capacity',
+        constraint: 'available_energy',
+        remainingEnergyWhAtBlock: remainingEnergyWh,
+      });
+      console.log('[Optimization] Decision', {
+        device: device.name,
+        decision: 'blocked',
+        category,
+        reason: 'available_energy',
+      });
+      return;
+    }
+
+    allowed.push({ device, deviceEnergyWh: requiredEnergyWh });
+    remainingEnergyWh -= requiredEnergyWh;
+    activePowerW += device.power;
+    console.log('[Optimization] Decision', {
+      device: device.name,
+      decision: 'allowed',
+      category,
+      active_power_after_w: activePowerW,
+      remaining_after_wh: remainingEnergyWh,
+    });
+  };
+
+  console.log('[Optimization] New cycle start', {
+    available_energy_wh: availableEnergyWh,
+    inverter_max_power_w: inverterMaxPowerW,
+    device_count: devices.length,
+    mandatory_count: mandatoryDevices.length,
+    optional_count: optionalDevices.length,
+  });
+
+  for (const device of mandatoryDevices) {
+    const requiredEnergyWh = device.power * (device.duration / 60);
+    totalDeviceEnergyWh += requiredEnergyWh;
+    mandatoryEnergyWh += requiredEnergyWh;
+    evaluateDevice(device, 'mandatory');
+  }
+
+  const optionalWithEnergy = optionalDevices
+    .map((device) => ({
+      device,
+      requiredEnergyWh: device.power * (device.duration / 60),
+    }))
+    .sort((a, b) => a.requiredEnergyWh - b.requiredEnergyWh);
+
+  for (const item of optionalWithEnergy) {
+    totalDeviceEnergyWh += item.requiredEnergyWh;
+    optionalEnergyWh += item.requiredEnergyWh;
+    evaluateDevice(item.device, 'optional');
+  }
+
+  const blockedMandatoryCount = blocked.filter((item) => item.device.essential).length;
+  const blockedOptionalCount = blocked.filter((item) => !item.device.essential).length;
+
+  console.log('[Optimization] Cycle summary', {
+    total_device_energy_wh: totalDeviceEnergyWh,
+    mandatory_energy_wh: mandatoryEnergyWh,
+    optional_energy_wh: optionalEnergyWh,
+    active_power_w: activePowerW,
+    remaining_energy_wh: remainingEnergyWh,
+    allowed_count: allowed.length,
+    blocked_count: blocked.length,
+    blocked_mandatory_count: blockedMandatoryCount,
+    blocked_optional_count: blockedOptionalCount,
+  });
+
+  const alternatives = buildAlternativeCombinations(
+    allowed,
+    blocked,
+    availableEnergyWh,
+    inverterMaxPowerW,
+    activePowerW,
+    remainingEnergyWh,
+  );
+  const durationSuggestions = buildDurationReductionSuggestions(blocked);
+
+  return {
+    allowed,
+    blocked,
+    remainingEnergyWh,
+    activePowerW,
+    blockedMandatoryCount,
+    blockedOptionalCount,
+    alternatives,
+    durationSuggestions,
+  };
+}
+
+export default function HomeScreen() {
+  const router = useRouter();
+  const previousVoltage = useRef<number | null>(null);
+
+  const [devices, setDevices] = useState<ApiDevice[]>([]);
+  const [battery, setBattery] = useState<EnergyDataItem | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [alerts, setAlerts] = useState<string[]>([]);
+
   const [city, setCity] = useState('Tel Aviv');
-  const [selectedCity, setSelectedCity] = useState<CitySuggestion | null>({ name: 'Tel Aviv', country: '' });
   const [citySuggestions, setCitySuggestions] = useState<CitySuggestion[]>([]);
-  const [cityLoading, setCityLoading] = useState(false);
-  const [cityError, setCityError] = useState<string | null>(null);
+  const [selectedCity, setSelectedCity] = useState<CitySuggestion | null>(null);
+  const [weather, setWeather] = useState<OptimizeWeather | null>(null);
+  const [batteryCapacityWhValue, setBatteryCapacityWhValue] = useState(0);
+  const batteryCapacityWhRef = useRef(0);
+  const [inverterMaxPowerWValue, setInverterMaxPowerWValue] = useState(DEFAULT_INVERTER_MAX_POWER_W);
+  const inverterMaxPowerWRef = useRef(DEFAULT_INVERTER_MAX_POWER_W);
+  const [weatherLoading, setWeatherLoading] = useState(false);
+  const [showAllInverterEssentialOnly, setShowAllInverterEssentialOnly] = useState(false);
+  const [showAllInverterOptionalOnly, setShowAllInverterOptionalOnly] = useState(false);
+  const [showAllInverterEssentialOptional, setShowAllInverterEssentialOptional] = useState(false);
+  const [showAllInvalidCombos, setShowAllInvalidCombos] = useState(false);
+  const [showAllEnergyEssentialOnly, setShowAllEnergyEssentialOnly] = useState(false);
+  const [showAllEnergyEssentialOptional, setShowAllEnergyEssentialOptional] = useState(false);
+  const [showAllEnergyInvalid, setShowAllEnergyInvalid] = useState(false);
+  const [selectedRunnableCombinationId, setSelectedRunnableCombinationId] = useState<string | null>(null);
+  const [showAllRunnableEssentialOnly, setShowAllRunnableEssentialOnly] = useState(false);
+  const [showAllRunnableOptionalOnly, setShowAllRunnableOptionalOnly] = useState(false);
+  const [showAllRunnableEssentialOptional, setShowAllRunnableEssentialOptional] = useState(false);
 
-  // Keep API result in state (multiple named optimization scenarios).
-  const [scenarios, setScenarios] = useState<OptimizeApiResponse | null>(null);
+  const voltage = typeof battery?.voltage === 'number' ? battery.voltage : 0;
+  const current = typeof battery?.current === 'number' ? battery.current : 0;
+  const soc = typeof battery?.soc === 'number' ? battery.soc : null;
+  const socNormalized = useMemo(() => (soc !== null ? soc / 100 : 0), [soc]);
+  const availableEnergyWh = useMemo(() => {
+    if (soc !== null) {
+      return batteryCapacityWhValue * socNormalized;
+    }
+    return batteryCapacityWhValue;
+  }, [batteryCapacityWhValue, soc, socNormalized]);
+  const optimization = useMemo(
+    () => optimizeDevices(devices, availableEnergyWh, inverterMaxPowerWValue),
+    [devices, availableEnergyWh, inverterMaxPowerWValue],
+  );
+  const inverterPowerCatalog = useMemo(
+    () => buildInverterPowerCatalog(devices, inverterMaxPowerWValue),
+    [devices, inverterMaxPowerWValue],
+  );
+  const devicesCatalogSignature = useMemo(() => buildDevicesCatalogSignature(devices), [devices]);
+  const energyCatalogSignature = useMemo(
+    () => `${devicesCatalogSignature}|${availableEnergyWh.toFixed(1)}`,
+    [devicesCatalogSignature, availableEnergyWh],
+  );
+  const energyCombinationCatalog = useMemo(
+    () => buildEnergyCombinationCatalog(devices, availableEnergyWh),
+    [devices, availableEnergyWh],
+  );
+  const runnableCombinationCatalog = useMemo(
+    () => buildRunnableCombinationCatalog(devices, inverterMaxPowerWValue, availableEnergyWh),
+    [devices, inverterMaxPowerWValue, availableEnergyWh],
+  );
+  const runnableCatalogSignature = useMemo(
+    () => `${energyCatalogSignature}|inv:${inverterMaxPowerWValue.toFixed(0)}`,
+    [energyCatalogSignature, inverterMaxPowerWValue],
+  );
+  const allRunnableCombinations = useMemo(
+    () => [
+      ...runnableCombinationCatalog.essentialOnly,
+      ...runnableCombinationCatalog.optionalOnly,
+      ...runnableCombinationCatalog.essentialWithOptional,
+    ],
+    [runnableCombinationCatalog],
+  );
+  const selectedRunnableCombination = useMemo(
+    () => allRunnableCombinations.find((combo) => combo.id === selectedRunnableCombinationId) ?? null,
+    [allRunnableCombinations, selectedRunnableCombinationId],
+  );
 
-  // Debug: confirm list updates in Metro / Xcode logs (helps when UI “looks” stuck).
   useEffect(() => {
-    console.log('[Devices] current devices array', devices);
-  }, [devices]);
+    setShowAllInverterEssentialOnly(false);
+    setShowAllInverterOptionalOnly(false);
+    setShowAllInverterEssentialOptional(false);
+    setShowAllInvalidCombos(false);
+  }, [devicesCatalogSignature, inverterMaxPowerWValue]);
 
-  // City autocomplete with debounce:
-  // - Wait briefly after typing before calling /cities.
-  // - Hide list when query is short/empty.
-  // - Show loading + error state for better UX.
+  useEffect(() => {
+    setShowAllEnergyEssentialOnly(false);
+    setShowAllEnergyEssentialOptional(false);
+    setShowAllEnergyInvalid(false);
+  }, [energyCatalogSignature]);
+
+  useEffect(() => {
+    setShowAllRunnableEssentialOnly(false);
+    setShowAllRunnableOptionalOnly(false);
+    setShowAllRunnableEssentialOptional(false);
+  }, [runnableCatalogSignature]);
+
+  useEffect(() => {
+    if (!selectedRunnableCombinationId) {
+      return;
+    }
+    const stillExists = allRunnableCombinations.some((combo) => combo.id === selectedRunnableCombinationId);
+    if (!stillExists) {
+      setSelectedRunnableCombinationId(null);
+    }
+  }, [allRunnableCombinations, selectedRunnableCombinationId]);
+
+  const handleSelectRunnableCombination = (comboId: string) => {
+    setSelectedRunnableCombinationId((prev) => (prev === comboId ? null : comboId));
+  };
+
+  const evaluateAlerts = (latestSoc: number | undefined, latestAvailableEnergyWh: number) => {
+    const dynamicAlerts: string[] = [];
+    const socValue = typeof latestSoc === 'number' ? latestSoc : null;
+    const nextHourUsageWh = devices.reduce((sum, d) => sum + d.power * (d.duration / 60), 0);
+
+    if (socValue !== null && socValue < 25) {
+      dynamicAlerts.push('⚠️ Low battery level');
+    }
+    if (socValue !== null && socValue < 35 && nextHourUsageWh > latestAvailableEnergyWh) {
+      dynamicAlerts.push('⚠️ High usage may drain battery soon');
+    }
+    if (socValue !== null && latestAvailableEnergyWh > 0 && nextHourUsageWh > latestAvailableEnergyWh) {
+      dynamicAlerts.push('⚠️ Risk of battery depletion');
+    }
+    if (optimization.blockedMandatoryCount > 0) {
+      dynamicAlerts.push('⚠️ Not enough energy for required devices');
+    }
+    if (optimization.blockedOptionalCount > 0) {
+      dynamicAlerts.push('Optional devices limited due to energy constraints');
+    }
+    const blockedByInverter = optimization.blocked.some((item) =>
+      item.reason?.includes('exceeds inverter limit'),
+    );
+    if (blockedByInverter) {
+      dynamicAlerts.push('⚠️ Some devices blocked due to inverter power limit');
+    }
+    setAlerts(dynamicAlerts);
+  };
+
+  const fetchDashboardData = async () => {
+    try {
+      let capacityWhForCalc = batteryCapacityWhRef.current;
+      let inverterMaxPowerWForCalc = inverterMaxPowerWRef.current;
+
+      try {
+        const solarRes = await fetch(`${SOLAR_SYSTEM_URL}?t=${Date.now()}`);
+        if (solarRes.status === 404) {
+          capacityWhForCalc = 0;
+          inverterMaxPowerWForCalc = DEFAULT_INVERTER_MAX_POWER_W;
+        } else if (solarRes.ok) {
+          const profile = (await solarRes.json()) as SolarSystemProfileResponse;
+          const parsedCapacity = Number(profile.battery_capacity_wh);
+          const parsedInverter = Number(profile.inverter_max_power_w);
+          capacityWhForCalc = !Number.isNaN(parsedCapacity) && parsedCapacity > 0 ? parsedCapacity : 0;
+          inverterMaxPowerWForCalc =
+            !Number.isNaN(parsedInverter) && parsedInverter > 0 ? parsedInverter : DEFAULT_INVERTER_MAX_POWER_W;
+        }
+      } catch {
+        capacityWhForCalc = batteryCapacityWhRef.current;
+        inverterMaxPowerWForCalc = inverterMaxPowerWRef.current;
+      }
+
+      batteryCapacityWhRef.current = capacityWhForCalc;
+      inverterMaxPowerWRef.current = inverterMaxPowerWForCalc;
+      setBatteryCapacityWhValue((prev) => (prev === capacityWhForCalc ? prev : capacityWhForCalc));
+      setInverterMaxPowerWValue((prev) =>
+        prev === inverterMaxPowerWForCalc ? prev : inverterMaxPowerWForCalc,
+      );
+
+      const [devicesRes, energyRes] = await Promise.all([
+        fetch(`${DEVICES_URL}?t=${Date.now()}`),
+        fetch(`${ENERGY_LATEST_URL}?t=${Date.now()}`),
+      ]);
+      if (devicesRes.ok) {
+        const devicesData = (await devicesRes.json()) as ApiDevice[];
+        if (Array.isArray(devicesData)) {
+          const nextSignature = buildDevicesCatalogSignature(devicesData);
+          setDevices((prev) =>
+            buildDevicesCatalogSignature(prev) === nextSignature ? prev : devicesData,
+          );
+        }
+      }
+      if (energyRes.ok) {
+        const latest = (await energyRes.json()) as EnergyDataItem;
+        const latestSoc = typeof latest?.soc === 'number' ? latest.soc : undefined;
+        const latestSocNormalized = typeof latestSoc === 'number' ? latestSoc / 100 : 0;
+        const latestAvailableEnergyWh =
+          typeof latestSoc === 'number'
+            ? capacityWhForCalc * latestSocNormalized
+            : capacityWhForCalc;
+        console.log('[Energy] Inputs and calculation', {
+          soc_raw: latestSoc,
+          soc_div_100: latestSocNormalized,
+          battery_capacity: capacityWhForCalc,
+          available_energy: latestAvailableEnergyWh,
+        });
+        setBattery(latest);
+        evaluateAlerts(latest?.soc, latestAvailableEnergyWh);
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const fetchWeather = async (targetCity: string) => {
+    setWeatherLoading(true);
+    try {
+      const res = await fetch(OPTIMIZE_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ city: targetCity, devices: [] }),
+      });
+      if (!res.ok) return;
+      const data = (await res.json()) as { weather?: OptimizeWeather };
+      setWeather(data.weather ?? null);
+    } finally {
+      setWeatherLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    void fetchDashboardData();
+    const id = setInterval(() => {
+      void fetchDashboardData();
+    }, 5000);
+    return () => clearInterval(id);
+  }, []);
+
   useEffect(() => {
     const query = city.trim();
     if (query.length < 2) {
       setCitySuggestions([]);
-      setCityLoading(false);
-      setCityError(null);
       return;
     }
-
     const timer = setTimeout(async () => {
-      try {
-        setCityLoading(true);
-        setCityError(null);
-        const response = await fetch(`${CITIES_URL}?query=${encodeURIComponent(query)}`);
-        if (!response.ok) {
-          throw new Error(`City lookup failed (${response.status})`);
-        }
-        const data: unknown = await response.json();
-        if (!Array.isArray(data)) {
-          throw new Error('City lookup returned invalid format');
-        }
-        const suggestions = data
-          .filter(
-            (item): item is CitySuggestion =>
-              typeof item === 'object' &&
-              item !== null &&
-              'name' in item &&
-              'country' in item &&
-              typeof (item as { name: unknown }).name === 'string' &&
-              typeof (item as { country: unknown }).country === 'string'
-          )
-          .slice(0, 8);
-        setCitySuggestions(suggestions);
-      } catch (err) {
-        const message = err instanceof Error ? err.message : 'Unable to load cities';
+      const res = await fetch(`${CITIES_URL}?query=${encodeURIComponent(query)}`);
+      if (!res.ok) {
         setCitySuggestions([]);
-        setCityError(message);
-      } finally {
-        setCityLoading(false);
+        return;
       }
-    }, 400);
-
+      const data = (await res.json()) as CitySuggestion[];
+      if (!Array.isArray(data)) {
+        setCitySuggestions([]);
+        return;
+      }
+      setCitySuggestions(data.slice(0, 8));
+    }, 350);
     return () => clearTimeout(timer);
   }, [city]);
 
-  // --- Adding a device -------------------------------------------------------
-  // Validates, appends to `devices`, then resets the form so the user can enter another.
-  const handleAddDevice = () => {
-    const trimmedName = name.trim();
-    // Normalize locale decimals (e.g. "7,2" → "7.2") so parseFloat is reliable.
-    const power = parseFloat(powerKw.replace(',', '.'));
-    const duration = parseInt(durationMinutes, 10);
-    const prio = parseInt(priority, 10);
-
-    if (!trimmedName) {
-      console.warn('[AddDevice] blocked: empty name');
-      Alert.alert('Validation', 'Please enter a device name.');
-      return;
-    }
-    if (Number.isNaN(power) || power <= 0) {
-      console.warn('[AddDevice] blocked: invalid power_kw', powerKw);
-      Alert.alert('Validation', 'Power (kW) must be a positive number.');
-      return;
-    }
-    if (Number.isNaN(duration) || duration <= 0) {
-      console.warn('[AddDevice] blocked: invalid duration_minutes', durationMinutes);
-      Alert.alert('Validation', 'Duration must be a positive whole number of minutes.');
-      return;
-    }
-    if (Number.isNaN(prio) || prio < 1 || prio > 5) {
-      console.warn('[AddDevice] blocked: invalid priority', priority);
-      Alert.alert('Validation', 'Priority must be between 1 and 5.');
-      return;
-    }
-    if (!/^\d{2}:\d{2}$/.test(startTime) || !/^\d{2}:\d{2}$/.test(endTime)) {
-      Alert.alert('Validation', 'Start/End time must be in HH:MM format.');
-      return;
-    }
-
-    const newDevice: DeviceRow = {
-      id: `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
-      name: trimmedName,
-      power_kw: power,
-      duration_minutes: duration,
-      priority: prio,
-      mandatory,
-      start_time: startTime,
-      end_time: endTime,
-    };
-
-    console.log('[AddDevice] adding device', newDevice);
-    setDevices((prev) => [...prev, newDevice]);
-
-    // Clear inputs after a successful add (fresh row for the next device).
-    setName('');
-    setPowerKw('');
-    setDurationMinutes('');
-    setPriority('3');
-    setMandatory(false);
-    setStartTime('08:00');
-    setEndTime('18:00');
-  };
-
-  /**
-   * POST `{ devices }` to the FastAPI `/optimize` endpoint.
-   *
-   * How `fetch` works (high level):
-   * - `fetch(url, options)` starts an HTTP request and returns a **Promise** that
-   *   resolves to a **Response** object (status, headers, body stream).
-   * - The Promise resolves when headers arrive; it does **not** throw on HTTP
-   *   error status (4xx/5xx) — check `response.ok` or `response.status`.
-   * - `await response.json()` reads the body and parses JSON (also async).
-   * - Network failures, DNS errors, etc. reject the Promise — use `try/catch`.
-   */
-  const handleOptimize = async () => {
-    // Log current list right before building the body (catches stale UI vs state confusion).
-    console.log('[Optimize] before request — devices in state', devices);
-
-    const payload = { city: city.trim(), devices: devices.map(toApiDevice) };
-
-    try {
-      // Log before the network call (URL + JSON body shape the server will receive).
-      console.log('[Optimize] Sending request', { url: OPTIMIZE_URL, body: payload });
-
-      const response = await fetch(OPTIMIZE_URL, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(payload),
-      });
-
-      // Log as soon as the HTTP response headers/status are available.
-      console.log('[Optimize] Response received', {
-        status: response.status,
-        ok: response.ok,
-        url: response.url,
-      });
-
-      const rawText = await response.text();
-      let data: unknown = null;
-      try {
-        data = rawText ? JSON.parse(rawText) : null;
-      } catch {
-        throw new Error(`Server did not return JSON (status ${response.status}). Body: ${rawText.slice(0, 200)}`);
-      }
-
-      if (!response.ok) {
-        const detail =
-          typeof data === 'object' && data !== null && 'detail' in data
-            ? JSON.stringify((data as { detail: unknown }).detail)
-            : rawText.slice(0, 300);
-        throw new Error(`HTTP ${response.status}: ${detail}`);
-      }
-
-      if (
-        typeof data !== 'object' ||
-        data === null ||
-        !('scenarios' in data) ||
-        !Array.isArray((data as { scenarios: unknown }).scenarios) ||
-        !('forecast' in data) ||
-        !Array.isArray((data as { forecast: unknown }).forecast) ||
-        !('alerts' in data) ||
-        !Array.isArray((data as { alerts: unknown }).alerts) ||
-        !('weather' in data)
-      ) {
-        console.warn('Optimize response missing required fields; clearing results.', data);
-        setScenarios(null);
-      } else {
-        setScenarios(data as OptimizeApiResponse);
-      }
-
-      // Log full parsed JSON after a successful read/parse (includes scenarios, telemetry, etc.).
-      console.log('[Optimize] Parsed response body', data);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      setScenarios(null);
-      Alert.alert('Optimize failed', message);
-      console.error('[Optimize] request failed — full error:', err);
-      console.error('[Optimize] message:', message);
-    }
-  };
-
-  const handleSelectCity = (item: CitySuggestion) => {
-    // Save selected city and fill the input.
+  const onSelectCity = (item: CitySuggestion) => {
     setSelectedCity(item);
     setCity(item.name);
     setCitySuggestions([]);
-    setCityError(null);
+    void fetchWeather(item.name);
   };
 
   return (
     <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
-      <ScrollView
-        style={styles.scroll}
-        contentContainerStyle={styles.scrollContent}
-        // Fix: default "handled" often eats the first tap on Add/Optimize while the keyboard
-        // is open (tap dismisses keyboard instead of firing onPress). "always" runs the button.
-        keyboardShouldPersistTaps="always"
-        keyboardDismissMode="on-drag">
-        <ThemedView style={styles.section}>
-          <ThemedText type="title">Devices</ThemedText>
-          <ThemedText style={styles.hint}>
-            Add devices, then Optimize (POST {OPTIMIZE_URL}). Use your PC LAN IP on a physical device.
-          </ThemedText>
+      <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="always">
+        <ThemedView style={styles.topSection}>
+          {alerts.length > 0 && (
+            <ThemedView style={styles.alertBanner}>
+              {alerts.map((alert, idx) => (
+                <ThemedText key={`alert-${idx}`} style={styles.alertText}>
+                  {alert}
+                </ThemedText>
+              ))}
+            </ThemedView>
+          )}
+
+          <ThemedView style={[styles.card, styles.infoBlue, styles.sectionSpacing]}>
+            <ThemedText type="subtitle">Weather</ThemedText>
+            <ThemedText style={styles.label}>City</ThemedText>
+            <TextInput style={styles.input} value={city} onChangeText={setCity} autoCapitalize="words" />
+            {citySuggestions.length > 0 && (
+              <ThemedView style={styles.dropdown}>
+                {citySuggestions.map((item, idx) => (
+                  <Pressable key={`${item.name}-${item.country}-${idx}`} style={({ pressed }) => [styles.cityRow, pressed && styles.buttonPressed]} onPress={() => onSelectCity(item)}>
+                    <ThemedText>{item.name}</ThemedText>
+                    <ThemedText style={styles.muted}>{item.country}</ThemedText>
+                  </Pressable>
+                ))}
+              </ThemedView>
+            )}
+            {weatherLoading ? <ActivityIndicator size="small" color="#0a7ea4" /> : null}
+            {selectedCity && weather && (
+              <ThemedView style={styles.subCard}>
+                <ThemedText>City: {weather.city ?? selectedCity.name}</ThemedText>
+                <ThemedText>Temperature: {weather.temperature ?? 'N/A'}</ThemedText>
+                <ThemedText>Condition: {weather.condition ?? 'N/A'}</ThemedText>
+              </ThemedView>
+            )}
+          </ThemedView>
         </ThemedView>
 
-        {scenarios && (
-          <ThemedView style={styles.section}>
-            <ThemedView style={styles.weatherCard}>
-              <ThemedText type="defaultSemiBold" style={styles.weatherTitle}>
-                Weather
+        <ThemedView style={styles.topHeaderCard}>
+          <ThemedText type="title">Manage Products</ThemedText>
+          <Pressable style={({ pressed }) => [styles.button, pressed && styles.buttonPressed]} onPress={() => router.push('/manage-devices')}>
+            <Text style={styles.buttonText}>Manage Electrical Devices</Text>
+          </Pressable>
+          <Pressable style={({ pressed }) => [styles.secondaryButton, pressed && styles.buttonPressed]} onPress={() => router.push('/solar-system-settings')}>
+            <Text style={styles.secondaryButtonText}>Solar System Settings</Text>
+          </Pressable>
+        </ThemedView>
+
+        <ThemedView style={styles.row}>
+          <ThemedView style={styles.batteryColumn}>
+            <ThemedView style={[styles.card, styles.infoBlue]}>
+              <ThemedText type="subtitle">Battery</ThemedText>
+              {loading ? (
+                <ActivityIndicator size="small" color="#0a7ea4" />
+              ) : (
+                <>
+                  <ThemedText>Voltage: {battery?.voltage !== undefined ? String(battery.voltage) : 'N/A'}</ThemedText>
+                  <ThemedText>Current: {battery?.current !== undefined ? String(battery.current) : 'N/A'}</ThemedText>
+                  <ThemedText style={styles.socText}>SOC: {battery?.soc !== undefined ? `${String(battery.soc)}%` : 'N/A'}</ThemedText>
+                  <ThemedView style={styles.socBarTrack}>
+                    <ThemedView style={[styles.socBarFill, { width: `${Math.max(0, Math.min(100, soc ?? 0))}%` }]} />
+                  </ThemedView>
+                </>
+              )}
+              <ThemedText style={styles.label}>Available Energy (Wh)</ThemedText>
+              <ThemedText type="defaultSemiBold">{availableEnergyWh.toFixed(1)} Wh</ThemedText>
+              {batteryCapacityWhValue <= 0 ? (
+                <ThemedText style={styles.muted}>
+                  Battery capacity comes from Solar System Settings. Configure it there to compute available energy.
+                </ThemedText>
+              ) : null}
+            </ThemedView>
+
+            <ThemedView style={[styles.card, styles.inverterCatalogCard]}>
+              <ThemedText type="subtitle">Inverter Power Combinations</ThemedText>
+              <ThemedText style={styles.muted}>
+                Simultaneous load only (max {inverterMaxPowerWValue.toFixed(0)} W). Independent of battery energy.
+                Updates when devices or inverter limit change.
               </ThemedText>
-              <ThemedText style={styles.weatherText}>City: {scenarios.weather.city}</ThemedText>
-              <ThemedText style={styles.weatherText}>Condition: {scenarios.weather.condition}</ThemedText>
-              <ThemedText style={styles.weatherText}>
-                Estimated energy: {scenarios.weather.energy_estimate.toFixed(2)} kWh
-              </ThemedText>
+
+              {devices.length === 0 ? (
+                <ThemedText style={styles.muted}>Add devices to see which sets can run together.</ThemedText>
+              ) : inverterPowerCatalog.tooManyDevices ? (
+                <ThemedText style={styles.muted}>
+                  Too many devices to list all combinations (max {MAX_INVERTER_ENUM_DEVICES}).
+                </ThemedText>
+              ) : (
+                <>
+                  <ThemedText type="defaultSemiBold" style={styles.inverterSectionTitle}>
+                    Required only ({inverterPowerCatalog.essentialOnly.length})
+                  </ThemedText>
+                  {inverterPowerCatalog.essentialOnly.length === 0 ? (
+                    <ThemedText style={styles.muted}>No required-only combination fits the inverter limit.</ThemedText>
+                  ) : (
+                    <InverterComboList
+                      combos={inverterPowerCatalog.essentialOnly}
+                      variant="valid"
+                      inverterMaxPowerW={inverterMaxPowerWValue}
+                      showAll={showAllInverterEssentialOnly}
+                      onToggleShowAll={() => setShowAllInverterEssentialOnly((prev) => !prev)}
+                    />
+                  )}
+
+                  <ThemedText type="defaultSemiBold" style={styles.inverterSectionTitle}>
+                    Optional only ({inverterPowerCatalog.optionalOnly.length})
+                  </ThemedText>
+                  {inverterPowerCatalog.optionalOnly.length === 0 ? (
+                    <ThemedText style={styles.muted}>No optional-only combination fits the inverter limit.</ThemedText>
+                  ) : (
+                    <InverterComboList
+                      combos={inverterPowerCatalog.optionalOnly}
+                      variant="valid"
+                      inverterMaxPowerW={inverterMaxPowerWValue}
+                      showAll={showAllInverterOptionalOnly}
+                      onToggleShowAll={() => setShowAllInverterOptionalOnly((prev) => !prev)}
+                    />
+                  )}
+
+                  <ThemedText type="defaultSemiBold" style={styles.inverterSectionTitle}>
+                    Required + Optional ({inverterPowerCatalog.essentialWithOptional.length})
+                  </ThemedText>
+                  {inverterPowerCatalog.essentialWithOptional.length === 0 ? (
+                    <ThemedText style={styles.muted}>
+                      No required + optional combination fits the inverter limit.
+                    </ThemedText>
+                  ) : (
+                    <InverterComboList
+                      combos={inverterPowerCatalog.essentialWithOptional}
+                      variant="valid"
+                      inverterMaxPowerW={inverterMaxPowerWValue}
+                      showAll={showAllInverterEssentialOptional}
+                      onToggleShowAll={() => setShowAllInverterEssentialOptional((prev) => !prev)}
+                    />
+                  )}
+
+                  <ThemedText type="defaultSemiBold" style={styles.inverterSectionTitle}>
+                    Cannot run together ({inverterPowerCatalog.invalid.length})
+                  </ThemedText>
+                  {inverterPowerCatalog.invalid.length === 0 ? (
+                    <ThemedText style={styles.muted}>Every listed combination fits the inverter limit.</ThemedText>
+                  ) : (
+                    <InverterComboList
+                      combos={inverterPowerCatalog.invalid}
+                      variant="invalid"
+                      inverterMaxPowerW={inverterMaxPowerWValue}
+                      showAll={showAllInvalidCombos}
+                      onToggleShowAll={() => setShowAllInvalidCombos((prev) => !prev)}
+                    />
+                  )}
+                </>
+              )}
             </ThemedView>
           </ThemedView>
-        )}
 
-        {scenarios && scenarios.alerts.length > 0 && (
-          <ThemedView style={styles.section}>
-            <ThemedView style={styles.alertsCard}>
-              <ThemedText type="defaultSemiBold" style={styles.alertsTitle}>
-                Alerts
+          <ThemedView style={styles.optimizationColumn}>
+            <ThemedView style={[styles.card, styles.runnableCatalogCard]}>
+              <ThemedText type="subtitle">Feasible Combinations (Inverter & Energy)</ThemedText>
+              <ThemedText style={styles.muted}>
+                Intersection of combinations that satisfy inverter power, battery energy, and required/optional rules.
+                Tap a combination to run it.
               </ThemedText>
-              {scenarios.alerts.map((alert, idx) => (
-                <ThemedView key={`alert-${idx}`} style={styles.alertRow}>
-                  <ThemedText style={styles.alertIcon}>[!]</ThemedText>
-                  <ThemedText style={styles.alertText}>{alert}</ThemedText>
+
+              {devices.length === 0 ? (
+                <ThemedText style={styles.muted}>Add devices to see feasible combinations.</ThemedText>
+              ) : runnableCombinationCatalog.noEnergyAvailable ? (
+                <ThemedText style={styles.muted}>
+                  Configure battery capacity and SOC to calculate feasible combinations.
+                </ThemedText>
+              ) : runnableCombinationCatalog.tooManyDevices ? (
+                <ThemedText style={styles.muted}>
+                  Too many devices to list all combinations (max {MAX_INVERTER_ENUM_DEVICES}).
+                </ThemedText>
+              ) : allRunnableCombinations.length === 0 ? (
+                <ThemedText style={styles.muted}>
+                  No combination satisfies both inverter and energy limits at the same time.
+                </ThemedText>
+              ) : (
+                <>
+                  <ThemedText type="defaultSemiBold" style={styles.inverterSectionTitle}>
+                    Required only ({runnableCombinationCatalog.essentialOnly.length})
+                  </ThemedText>
+                  {runnableCombinationCatalog.essentialOnly.length === 0 ? (
+                    <ThemedText style={styles.muted}>No required-only feasible combination.</ThemedText>
+                  ) : (
+                    <RunnableComboList
+                      combos={runnableCombinationCatalog.essentialOnly}
+                      selectedId={selectedRunnableCombinationId}
+                      inverterMaxPowerW={inverterMaxPowerWValue}
+                      availableEnergyWh={availableEnergyWh}
+                      showAll={showAllRunnableEssentialOnly}
+                      onToggleShowAll={() => setShowAllRunnableEssentialOnly((prev) => !prev)}
+                      onSelect={handleSelectRunnableCombination}
+                    />
+                  )}
+
+                  <ThemedText type="defaultSemiBold" style={styles.inverterSectionTitle}>
+                    Optional only ({runnableCombinationCatalog.optionalOnly.length})
+                  </ThemedText>
+                  {runnableCombinationCatalog.optionalOnly.length === 0 ? (
+                    <ThemedText style={styles.muted}>No optional-only feasible combination.</ThemedText>
+                  ) : (
+                    <RunnableComboList
+                      combos={runnableCombinationCatalog.optionalOnly}
+                      selectedId={selectedRunnableCombinationId}
+                      inverterMaxPowerW={inverterMaxPowerWValue}
+                      availableEnergyWh={availableEnergyWh}
+                      showAll={showAllRunnableOptionalOnly}
+                      onToggleShowAll={() => setShowAllRunnableOptionalOnly((prev) => !prev)}
+                      onSelect={handleSelectRunnableCombination}
+                    />
+                  )}
+
+                  <ThemedText type="defaultSemiBold" style={styles.inverterSectionTitle}>
+                    Required + Optional ({runnableCombinationCatalog.essentialWithOptional.length})
+                  </ThemedText>
+                  {runnableCombinationCatalog.essentialWithOptional.length === 0 ? (
+                    <ThemedText style={styles.muted}>No required + optional feasible combination.</ThemedText>
+                  ) : (
+                    <RunnableComboList
+                      combos={runnableCombinationCatalog.essentialWithOptional}
+                      selectedId={selectedRunnableCombinationId}
+                      inverterMaxPowerW={inverterMaxPowerWValue}
+                      availableEnergyWh={availableEnergyWh}
+                      showAll={showAllRunnableEssentialOptional}
+                      onToggleShowAll={() => setShowAllRunnableEssentialOptional((prev) => !prev)}
+                      onSelect={handleSelectRunnableCombination}
+                    />
+                  )}
+                </>
+              )}
+            </ThemedView>
+
+          <ThemedView style={[styles.card, styles.safeGreen]}>
+            <ThemedText type="subtitle">Optimization Results</ThemedText>
+
+            {selectedRunnableCombination ? (
+              <>
+                <ThemedText type="defaultSemiBold" style={styles.selectedPlanTitle}>
+                  Selected Running Plan
+                </ThemedText>
+                <ThemedView style={styles.selectedPlanCard}>
+                  <ThemedText>{selectedRunnableCombination.summary}</ThemedText>
+                  <ThemedText style={styles.muted}>
+                    Total load {selectedRunnableCombination.totalPowerW.toFixed(0)} W · Total energy{' '}
+                    {selectedRunnableCombination.totalEnergyWh.toFixed(0)} Wh
+                  </ThemedText>
+                  {selectedRunnableCombination.devices.map((device) => (
+                    <ThemedText key={`selected-${device.id}`}>
+                      - {device.name} ({device.essential ? 'Required' : 'Optional'}) · {device.power} W ·{' '}
+                      {device.duration} min · {deviceEnergyWh(device).toFixed(0)} Wh
+                    </ThemedText>
+                  ))}
                 </ThemedView>
-              ))}
-            </ThemedView>
-          </ThemedView>
-        )}
+              </>
+            ) : (
+              <ThemedText style={styles.muted}>
+                Select a feasible combination above to display your running plan here.
+              </ThemedText>
+            )}
 
-        <ThemedView style={styles.section}>
-          <ThemedText type="subtitle">New device</ThemedText>
-
-          <ThemedText style={styles.label}>City</ThemedText>
-          <TextInput
-            style={styles.input}
-            value={city}
-            onChangeText={(text) => {
-              setCity(text);
-              setSelectedCity(null);
-            }}
-            placeholder="e.g. Tel Aviv"
-            placeholderTextColor="#888"
-            autoCapitalize="words"
-          />
-          {cityLoading && (
-            <ThemedView style={styles.cityStatusRow}>
-              <ActivityIndicator size="small" color="#0a7ea4" />
-              <ThemedText style={styles.cityStatusText}>Searching cities...</ThemedText>
-            </ThemedView>
-          )}
-          {!!cityError && <ThemedText style={styles.cityErrorText}>{cityError}</ThemedText>}
-          {citySuggestions.length > 0 && (
-            <ThemedView style={styles.cityDropdown}>
-              {citySuggestions.map((item, idx) => (
-                <Pressable
-                  key={`city-${item.name}-${item.country}-${idx}`}
-                  onPress={() => handleSelectCity(item)}
-                  style={({ pressed }) => [styles.cityOption, pressed && styles.buttonPressed]}>
-                  <ThemedText style={styles.cityOptionName}>{item.name}</ThemedText>
-                  <ThemedText style={styles.cityOptionCountry}>{item.country}</ThemedText>
-                </Pressable>
-              ))}
-            </ThemedView>
-          )}
-          {selectedCity && (
-            <ThemedText style={styles.selectedCityText}>
-              Selected city: {selectedCity.name}
-              {selectedCity.country ? ` (${selectedCity.country})` : ''}
+            <ThemedText type="defaultSemiBold" style={styles.blockedTitle}>
+              Automatic Schedule (priority-based)
             </ThemedText>
-          )}
+            <ThemedText style={styles.muted}>
+              Inverter limit: {inverterMaxPowerWValue.toFixed(0)} W · Active load: {optimization.activePowerW.toFixed(0)} W
+            </ThemedText>
+            <ThemedText type="defaultSemiBold">Allowed Devices ({optimization.allowed.length})</ThemedText>
+            {optimization.allowed.length === 0 ? (
+              <ThemedText style={styles.muted}>No devices can run now.</ThemedText>
+            ) : (
+              optimization.allowed.map((item) => (
+                <ThemedText key={`allowed-${item.device.id}`}>
+                  - {item.device.name} ({item.device.essential ? 'Required' : 'Optional'}) - {item.deviceEnergyWh.toFixed(1)} Wh
+                </ThemedText>
+              ))
+            )}
 
-          <ThemedText style={styles.label}>Name</ThemedText>
-          <TextInput
-            style={styles.input}
-            value={name}
-            onChangeText={setName}
-            placeholder="e.g. EV charger"
-            placeholderTextColor="#888"
-            autoCapitalize="words"
-          />
+            <ThemedText type="defaultSemiBold" style={styles.blockedTitle}>
+              Blocked Devices ({optimization.blocked.length})
+            </ThemedText>
+            {optimization.blocked.length === 0 ? (
+              <ThemedText style={styles.muted}>No blocked devices.</ThemedText>
+            ) : (
+              optimization.blocked.map((item) => (
+                <ThemedText key={`blocked-${item.device.id}`}>
+                  - {item.device.name} ({item.device.essential ? 'Required' : 'Optional'}): {item.reason}
+                </ThemedText>
+              ))
+            )}
 
-          <ThemedText style={styles.label}>Power (kW)</ThemedText>
-          <TextInput
-            style={styles.input}
-            value={powerKw}
-            onChangeText={setPowerKw}
-            placeholder="e.g. 7.2"
-            placeholderTextColor="#888"
-            keyboardType="decimal-pad"
-          />
+            {optimization.alternatives.length > 0 ? (
+              <>
+                <ThemedText type="defaultSemiBold" style={styles.blockedTitle}>
+                  Swap Suggestions
+                </ThemedText>
+                <ThemedText style={styles.muted}>
+                  Replace currently allowed devices to free inverter or energy capacity:
+                </ThemedText>
+                {optimization.alternatives.map((option) => (
+                  <ThemedView key={option.id} style={styles.alternativeCard}>
+                    <ThemedText type="defaultSemiBold">
+                      For {option.blockedDevice.name} (
+                      {option.constraint === 'inverter_power' ? 'inverter limit' : 'energy limit'})
+                    </ThemedText>
+                    <ThemedText>{option.summary}</ThemedText>
+                    {option.removeDevices.length > 0 ? (
+                      <ThemedText style={styles.muted}>
+                        Frees {option.removeDevices.reduce((sum, device) => sum + device.power, 0).toFixed(0)} W /{' '}
+                        {option.removeDevices.reduce((sum, device) => sum + deviceEnergyWh(device), 0).toFixed(0)} Wh
+                      </ThemedText>
+                    ) : (
+                      <ThemedText style={styles.muted}>
+                        Uses remaining headroom ({(inverterMaxPowerWValue - optimization.activePowerW).toFixed(0)} W /{' '}
+                        {optimization.remainingEnergyWh.toFixed(0)} Wh available)
+                      </ThemedText>
+                    )}
+                  </ThemedView>
+                ))}
+              </>
+            ) : null}
 
-          <ThemedText style={styles.label}>Duration (minutes)</ThemedText>
-          <TextInput
-            style={styles.input}
-            value={durationMinutes}
-            onChangeText={setDurationMinutes}
-            placeholder="e.g. 120"
-            placeholderTextColor="#888"
-            keyboardType="number-pad"
-          />
-
-          <ThemedText style={styles.label}>Priority (1–5)</ThemedText>
-          <TextInput
-            style={styles.input}
-            value={priority}
-            onChangeText={setPriority}
-            placeholder="1 to 5"
-            placeholderTextColor="#888"
-            keyboardType="number-pad"
-            maxLength={1}
-          />
-
-          <ThemedText style={styles.label}>Start time (HH:MM)</ThemedText>
-          <TextInput
-            style={styles.input}
-            value={startTime}
-            onChangeText={setStartTime}
-            placeholder="08:00"
-            placeholderTextColor="#888"
-            autoCapitalize="none"
-          />
-
-          <ThemedText style={styles.label}>End time (HH:MM)</ThemedText>
-          <TextInput
-            style={styles.input}
-            value={endTime}
-            onChangeText={setEndTime}
-            placeholder="18:00"
-            placeholderTextColor="#888"
-            autoCapitalize="none"
-          />
-
-          <ThemedView style={styles.switchRow}>
-            <ThemedText style={styles.label}>Mandatory</ThemedText>
-            <Switch value={mandatory} onValueChange={setMandatory} />
+            {optimization.durationSuggestions.length > 0 ? (
+              <>
+                <ThemedText type="defaultSemiBold" style={styles.blockedTitle}>
+                  Duration Reduction Options
+                </ThemedText>
+                <ThemedText style={styles.muted}>
+                  Shorten runtime to fit within available energy:
+                </ThemedText>
+                {optimization.durationSuggestions.map((option) => (
+                  <ThemedView key={option.id} style={styles.durationCard}>
+                    <ThemedText type="defaultSemiBold">{option.device.name}</ThemedText>
+                    <ThemedText>{option.summary}</ThemedText>
+                    {option.suggestedDurationMinutes > 0 ? (
+                      <ThemedText style={styles.muted}>
+                        Planned: {option.originalDurationMinutes} min (
+                        {energyForDuration(option.device, option.originalDurationMinutes).toFixed(0)} Wh) · Suggested:{' '}
+                        {option.suggestedDurationMinutes} min ({option.suggestedEnergyWh.toFixed(0)} Wh)
+                      </ThemedText>
+                    ) : null}
+                  </ThemedView>
+                ))}
+              </>
+            ) : null}
           </ThemedView>
 
-          <Pressable
-            accessibilityRole="button"
-            android_ripple={{ color: 'rgba(255,255,255,0.3)' }}
-            style={({ pressed }) => [styles.button, pressed && styles.buttonPressed]}
-            onPress={handleAddDevice}>
-            <Text style={styles.buttonText}>Add Device</Text>
-          </Pressable>
+            <ThemedView style={[styles.card, styles.energyCatalogCard]}>
+              <ThemedText type="subtitle">Battery Energy Combinations</ThemedText>
+              <ThemedText style={styles.muted}>
+                Runtime energy from each device (power × hours). Required devices first; optional only with required.
+                Available: {availableEnergyWh.toFixed(1)} Wh.
+              </ThemedText>
 
-          <Pressable
-            accessibilityRole="button"
-            style={({ pressed }) => [styles.buttonSecondary, pressed && styles.buttonPressed]}
-            onPress={() => {
-              void handleOptimize();
-            }}>
-            <Text style={styles.buttonSecondaryText}>Optimize</Text>
-          </Pressable>
+              {devices.length === 0 ? (
+                <ThemedText style={styles.muted}>Add devices to see energy combinations.</ThemedText>
+              ) : energyCombinationCatalog.noEnergyAvailable ? (
+                <ThemedText style={styles.muted}>
+                  Configure battery capacity and SOC to calculate available energy combinations.
+                </ThemedText>
+              ) : energyCombinationCatalog.tooManyDevices ? (
+                <ThemedText style={styles.muted}>
+                  Too many devices to list all combinations (max {MAX_ENERGY_ENUM_DEVICES}).
+                </ThemedText>
+              ) : (
+                <>
+                  <ThemedText type="defaultSemiBold" style={styles.inverterSectionTitle}>
+                    Required only ({energyCombinationCatalog.essentialOnly.length})
+                  </ThemedText>
+                  {energyCombinationCatalog.essentialOnly.length === 0 ? (
+                    <ThemedText style={styles.muted}>No required-only combination fits available energy.</ThemedText>
+                  ) : (
+                    <EnergyComboList
+                      combos={energyCombinationCatalog.essentialOnly}
+                      variant="valid"
+                      availableEnergyWh={availableEnergyWh}
+                      showAll={showAllEnergyEssentialOnly}
+                      onToggleShowAll={() => setShowAllEnergyEssentialOnly((prev) => !prev)}
+                    />
+                  )}
+
+                  <ThemedText type="defaultSemiBold" style={styles.inverterSectionTitle}>
+                    Required + Optional ({energyCombinationCatalog.essentialWithOptional.length})
+                  </ThemedText>
+                  {energyCombinationCatalog.essentialWithOptional.length === 0 ? (
+                    <ThemedText style={styles.muted}>
+                      No required + optional combination fits available energy.
+                    </ThemedText>
+                  ) : (
+                    <EnergyComboList
+                      combos={energyCombinationCatalog.essentialWithOptional}
+                      variant="valid"
+                      availableEnergyWh={availableEnergyWh}
+                      showAll={showAllEnergyEssentialOptional}
+                      onToggleShowAll={() => setShowAllEnergyEssentialOptional((prev) => !prev)}
+                    />
+                  )}
+
+                  <ThemedText type="defaultSemiBold" style={styles.inverterSectionTitle}>
+                    Cannot run together ({energyCombinationCatalog.invalid.length})
+                  </ThemedText>
+                  {energyCombinationCatalog.invalid.length === 0 ? (
+                    <ThemedText style={styles.muted}>Every listed combination fits energy rules.</ThemedText>
+                  ) : (
+                    <EnergyComboList
+                      combos={energyCombinationCatalog.invalid}
+                      variant="invalid"
+                      availableEnergyWh={availableEnergyWh}
+                      showAll={showAllEnergyInvalid}
+                      onToggleShowAll={() => setShowAllEnergyInvalid((prev) => !prev)}
+                    />
+                  )}
+                </>
+              )}
+            </ThemedView>
+          </ThemedView>
         </ThemedView>
 
-        <ThemedView style={styles.section}>
-          <ThemedText type="subtitle">Device list ({devices.length})</ThemedText>
+        <ThemedView style={[styles.card, styles.infoNeutral]}>
+          <ThemedText type="subtitle">Devices ({devices.length})</ThemedText>
           {devices.length === 0 ? (
-            <ThemedText style={styles.empty}>No devices yet. Add one above.</ThemedText>
+            <ThemedText style={styles.muted}>No products saved yet.</ThemedText>
           ) : (
             devices.map((d) => (
-              <ThemedView key={d.id} style={styles.card}>
-                <ThemedText type="defaultSemiBold">
-                  {d.name} — {d.power_kw} kW
-                </ThemedText>
-                <ThemedText>
-                  {d.duration_minutes} min · priority {d.priority} ·{' '}
-                  {d.mandatory ? 'mandatory' : 'optional'} · {d.start_time}-{d.end_time}
-                </ThemedText>
-              </ThemedView>
-            ))
-          )}
-        </ThemedView>
-
-        <ThemedView style={styles.section}>
-          <ThemedText type="subtitle">Optimization results</ThemedText>
-          {!scenarios ? (
-            <ThemedText style={styles.empty}>Run Optimize after a successful request to see results here.</ThemedText>
-          ) : (
-            scenarios.scenarios.map((scenario, scenarioIndex) => (
-              <ThemedView key={`scenario-${scenarioIndex}-${scenario.name}`} style={styles.scenarioCard}>
-                <ThemedText type="defaultSemiBold" style={styles.scenarioTitle}>
-                  {scenario.name}
-                </ThemedText>
-                <ThemedText style={styles.hint}>
-                  Remaining energy: {scenario.remaining_energy.toFixed(2)} kWh
-                </ThemedText>
-
-                <ThemedView style={[styles.subCard, styles.canRunCard]}>
-                  <ThemedText type="defaultSemiBold" style={[styles.subCardTitle, styles.canRunTitle]}>
-                    Can Run ({scenario.can_run.length})
-                  </ThemedText>
-                  {scenario.can_run.length === 0 ? (
-                    <ThemedText style={styles.listEmpty}>None</ThemedText>
-                  ) : (
-                    <ThemedView style={styles.deviceList}>
-                      {scenario.can_run.map((d, i) => (
-                        <ApiDeviceRow key={`can-run-${scenarioIndex}-${d.name}-${i}`} device={d} index={i} />
-                      ))}
-                    </ThemedView>
-                  )}
+              <ThemedView key={d.id} style={styles.deviceRowCard}>
+                <ThemedView style={styles.deviceRowTop}>
+                  <ThemedText type="defaultSemiBold">{d.name}</ThemedText>
+                  <ThemedText style={styles.devicePowerBadge}>{d.power} W</ThemedText>
                 </ThemedView>
-
-                <ThemedView style={[styles.subCard, styles.cannotRunCard]}>
-                  <ThemedText type="defaultSemiBold" style={[styles.subCardTitle, styles.cannotRunTitle]}>
-                    Cannot Run ({scenario.cannot_run.length})
-                  </ThemedText>
-                  {scenario.cannot_run.length === 0 ? (
-                    <ThemedText style={styles.listEmpty}>None</ThemedText>
-                  ) : (
-                    <ThemedView style={styles.deviceList}>
-                      {scenario.cannot_run.map((item, i) => (
-                        <ThemedView key={`cannot-run-${scenarioIndex}-${item.device.name}-${i}`} style={styles.deviceRow}>
-                          <ApiDeviceRow device={item.device} index={i} />
-                          <ThemedText style={styles.reasonText}>Reason: {item.reason}</ThemedText>
-                        </ThemedView>
-                      ))}
-                    </ThemedView>
-                  )}
-                </ThemedView>
-              </ThemedView>
-            ))
-          )}
-        </ThemedView>
-
-        <ThemedView style={styles.section}>
-          <ThemedText type="subtitle">12-Hour Forecast</ThemedText>
-          {!scenarios ? (
-            <ThemedText style={styles.empty}>Forecast appears after a successful Optimize call.</ThemedText>
-          ) : (
-            scenarios.forecast.map((hourResult, hourIndex) => (
-              <ThemedView key={`forecast-${hourIndex}-${hourResult.hour}`} style={styles.forecastCard}>
-                <ThemedText type="defaultSemiBold" style={styles.forecastHour}>
-                  {hourResult.hour}
+                <ThemedText style={styles.muted}>
+                  Priority {d.priority} · {d.essential ? 'mandatory' : 'optional'} · {d.duration} min
                 </ThemedText>
-                <ThemedText style={styles.hint}>
-                  Remaining energy: {hourResult.remaining_energy.toFixed(2)} kWh
-                </ThemedText>
-                {hourResult.can_run.length === 0 ? (
-                  <ThemedText style={styles.listEmpty}>No devices can run in this hour.</ThemedText>
-                ) : (
-                  <ThemedView style={styles.deviceList}>
-                    {hourResult.can_run.map((device, deviceIndex) => (
-                      <ApiDeviceRow
-                        key={`forecast-device-${hourIndex}-${device.name}-${deviceIndex}`}
-                        device={device}
-                        index={deviceIndex}
-                      />
-                    ))}
-                  </ThemedView>
-                )}
               </ThemedView>
             ))
           )}
@@ -625,252 +1758,327 @@ const styles = StyleSheet.create({
   safe: {
     flex: 1,
   },
-  scroll: {
+  container: {
+    padding: 18,
+    gap: 16,
+    paddingBottom: 28,
+  },
+  topSection: {
+    marginBottom: 4,
+  },
+  topHeaderCard: {
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#d7deea',
+    borderRadius: 12,
+    backgroundColor: '#f8fbff',
+    padding: 14,
+    gap: 10,
+    shadowColor: '#000',
+    shadowOpacity: 0.06,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 3 },
+    elevation: 2,
+  },
+  row: {
+    flexDirection: 'row',
+    gap: 12,
+    alignItems: 'flex-start',
+    flexWrap: 'wrap',
+  },
+  batteryColumn: {
     flex: 1,
+    minWidth: 280,
+    gap: 12,
   },
-  scrollContent: {
-    paddingBottom: 24,
+  optimizationColumn: {
+    flex: 1,
+    minWidth: 280,
+    gap: 12,
   },
-  section: {
-    paddingHorizontal: 16,
-    paddingTop: 16,
-    gap: 8,
-  },
-  hint: {
-    opacity: 0.8,
-    marginTop: 4,
-  },
-  label: {
-    marginTop: 8,
-    fontSize: 14,
-  },
-  input: {
+  card: {
+    flex: 1,
+    minWidth: 280,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#ccc',
-    borderRadius: 8,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    fontSize: 16,
-    color: '#111',
-    backgroundColor: '#f9f9f9',
+    borderColor: '#d7deea',
+    borderRadius: 12,
+    backgroundColor: '#f8fbff',
+    padding: 14,
+    gap: 10,
+    shadowColor: '#000',
+    shadowOpacity: 0.06,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 3 },
+    elevation: 2,
   },
-  cityStatusRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    marginTop: 6,
+  infoBlue: {
+    borderColor: '#9ec5f8',
+    backgroundColor: '#eef5ff',
   },
-  cityStatusText: {
-    fontSize: 13,
-    opacity: 0.8,
+  safeGreen: {
+    borderColor: '#9ad3a6',
+    backgroundColor: '#edf9ef',
   },
-  cityErrorText: {
-    marginTop: 6,
-    fontSize: 13,
-    color: '#a12222',
+  infoNeutral: {
+    borderColor: '#d7deea',
+    backgroundColor: '#f8fbff',
   },
-  cityDropdown: {
-    marginTop: 6,
+  alertBanner: {
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#cfd6e4',
-    borderRadius: 8,
-    overflow: 'hidden',
-    backgroundColor: '#fff',
+    borderColor: '#d54d38',
+    borderRadius: 10,
+    backgroundColor: '#ffe9e5',
+    padding: 12,
+    gap: 4,
+    marginBottom: 10,
   },
-  cityOption: {
-    paddingHorizontal: 10,
-    paddingVertical: 8,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#e7ebf2',
-  },
-  cityOptionName: {
-    fontSize: 14,
-  },
-  cityOptionCountry: {
-    fontSize: 12,
-    opacity: 0.75,
-  },
-  selectedCityText: {
-    marginTop: 6,
-    fontSize: 13,
-    color: '#1f3b63',
-  },
-  switchRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginTop: 8,
-    paddingVertical: 4,
+  alertText: {
+    color: '#b1321f',
+    fontWeight: '700',
   },
   button: {
-    marginTop: 16,
     backgroundColor: '#0a7ea4',
-    paddingVertical: 14,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
     borderRadius: 8,
     alignItems: 'center',
-  },
-  buttonSecondary: {
-    marginTop: 10,
-    paddingVertical: 14,
-    borderRadius: 8,
-    alignItems: 'center',
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#0a7ea4',
   },
   buttonPressed: {
     opacity: 0.85,
   },
   buttonText: {
     color: '#fff',
-    fontSize: 16,
+    fontSize: 15,
     fontWeight: '600',
   },
-  buttonSecondaryText: {
-    color: '#0a7ea4',
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  empty: {
-    opacity: 0.7,
-    marginTop: 8,
-  },
-  card: {
-    marginTop: 10,
-    padding: 12,
+  secondaryButton: {
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#0a7ea4',
     borderRadius: 8,
+    alignItems: 'center',
+    paddingVertical: 10,
+    backgroundColor: '#fff',
+  },
+  secondaryButtonText: {
+    color: '#0a7ea4',
+    fontSize: 15,
+    fontWeight: '600',
+  },
+  label: { fontSize: 14 },
+  input: {
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#ddd',
-    gap: 4,
+    borderColor: '#c6ced8',
+    backgroundColor: '#fff',
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 10,
+    fontSize: 15,
   },
-  scenarioCard: {
-    marginTop: 14,
-    padding: 14,
-    borderRadius: 10,
+  dropdown: {
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#c8c8c8',
-    backgroundColor: '#f6f8f9',
-    gap: 6,
+    borderColor: '#ccd6e2',
+    borderRadius: 8,
+    backgroundColor: '#fff',
+    overflow: 'hidden',
   },
-  scenarioTitle: {
-    fontSize: 17,
-    marginBottom: 2,
-  },
-  forecastCard: {
-    marginTop: 10,
-    padding: 12,
-    borderRadius: 10,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#c8d4e8',
-    backgroundColor: '#f4f8ff',
-    gap: 4,
-  },
-  forecastHour: {
-    fontSize: 16,
-  },
-  weatherCard: {
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#9ec5f8',
-    backgroundColor: '#eef5ff',
-    borderRadius: 10,
-    padding: 12,
-    gap: 4,
-  },
-  weatherTitle: {
-    color: '#1a4f8a',
-    fontSize: 16,
-  },
-  weatherText: {
-    color: '#1f3b63',
-    fontSize: 14,
-  },
-  alertsCard: {
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#f0b27a',
-    backgroundColor: '#fff4e8',
-    borderRadius: 10,
-    padding: 12,
-    gap: 8,
-  },
-  alertsTitle: {
-    color: '#a84300',
-    fontSize: 16,
-  },
-  alertRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: 8,
-    paddingVertical: 2,
-  },
-  alertIcon: {
-    color: '#b14d00',
-    fontSize: 14,
-    marginTop: 1,
-  },
-  alertText: {
-    color: '#8f2d0a',
-    fontSize: 14,
-    flex: 1,
-    lineHeight: 20,
+  cityRow: {
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#e6edf5',
   },
   subCard: {
-    marginTop: 8,
-    padding: 10,
-    borderRadius: 8,
     borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#d1d9e2',
+    borderRadius: 10,
+    padding: 10,
+    backgroundColor: '#fff',
+    gap: 4,
   },
-  subCardTitle: {
-    fontSize: 15,
+  muted: { opacity: 0.7 },
+  blockedTitle: { marginTop: 10 },
+  alternativeCard: {
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#b8dcc0',
+    borderRadius: 8,
+    backgroundColor: '#f7fcf8',
+    padding: 10,
+    gap: 4,
+  },
+  durationCard: {
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#c9d8f5',
+    borderRadius: 8,
+    backgroundColor: '#f3f8ff',
+    padding: 10,
+    gap: 4,
+  },
+  inverterCatalogCard: {
+    borderColor: '#d4c4a8',
+    backgroundColor: '#fffaf0',
+  },
+  energyCatalogCard: {
+    borderColor: '#9ec5f8',
+    backgroundColor: '#f0f6ff',
+  },
+  runnableCatalogCard: {
+    borderColor: '#7fb87f',
+    backgroundColor: '#f2faf2',
+  },
+  runnableComboFrame: {
+    borderWidth: 2,
+    borderColor: '#9ad3a6',
+    borderRadius: 10,
+    backgroundColor: '#ffffff',
+    padding: 12,
+    gap: 6,
+  },
+  runnableComboFrameSelected: {
+    borderColor: '#1f7a34',
+    backgroundColor: '#e8f8eb',
+  },
+  runnableComboText: {
+    color: '#1f5c2e',
+  },
+  selectComboButtonText: {
+    color: '#0a7ea4',
+    fontSize: 13,
+    fontWeight: '700',
+    marginTop: 2,
+  },
+  selectedPlanTitle: {
+    marginTop: 4,
+  },
+  selectedPlanCard: {
+    borderWidth: 2,
+    borderColor: '#1f7a34',
+    borderRadius: 10,
+    backgroundColor: '#edf9ef',
+    padding: 12,
+    gap: 6,
+  },
+  energyComboFrameValid: {
+    borderWidth: 2,
+    borderColor: '#3d7abf',
+    borderRadius: 10,
+    backgroundColor: '#ffffff',
+    padding: 12,
+    gap: 6,
+    shadowColor: '#000',
+    shadowOpacity: 0.06,
+    shadowRadius: 4,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 2,
+  },
+  energyComboFrameInvalid: {
+    borderWidth: 2,
+    borderColor: '#c45c4a',
+    borderRadius: 10,
+    backgroundColor: '#ffffff',
+    padding: 12,
+    gap: 6,
+    shadowColor: '#000',
+    shadowOpacity: 0.06,
+    shadowRadius: 4,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 2,
+  },
+  energyValidText: {
+    color: '#1b4b7a',
+  },
+  energyInvalidText: {
+    color: '#8b3a2a',
+  },
+  inverterSectionTitle: {
+    marginTop: 12,
     marginBottom: 4,
   },
-  canRunCard: {
-    borderColor: '#9ad3a6',
-    backgroundColor: '#edf9ef',
+  inverterComboList: {
+    gap: 10,
+    marginBottom: 4,
   },
-  cannotRunCard: {
-    borderColor: '#e1a0a0',
-    backgroundColor: '#fdf0f0',
+  inverterComboFrameValid: {
+    borderWidth: 2,
+    borderColor: '#3d9a52',
+    borderRadius: 10,
+    backgroundColor: '#ffffff',
+    padding: 12,
+    gap: 6,
+    shadowColor: '#000',
+    shadowOpacity: 0.06,
+    shadowRadius: 4,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 2,
   },
-  canRunTitle: {
-    color: '#1f7a34',
+  inverterComboFrameInvalid: {
+    borderWidth: 2,
+    borderColor: '#d07060',
+    borderRadius: 10,
+    backgroundColor: '#ffffff',
+    padding: 12,
+    gap: 6,
+    shadowColor: '#000',
+    shadowOpacity: 0.06,
+    shadowRadius: 4,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 2,
   },
-  cannotRunTitle: {
-    color: '#a12222',
+  inverterValidText: {
+    color: '#1f5c2e',
   },
-  subsectionLabel: {
-    marginTop: 10,
+  inverterInvalidText: {
+    color: '#8b3a2a',
+  },
+  showAllButton: {
+    alignSelf: 'flex-start',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#0a7ea4',
+    borderRadius: 8,
+    backgroundColor: '#fff',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    marginTop: 2,
+  },
+  showAllButtonText: {
+    color: '#0a7ea4',
     fontSize: 14,
-    opacity: 0.85,
     fontWeight: '600',
   },
-  deviceList: {
-    marginTop: 4,
-    gap: 0,
-  },
-  deviceRow: {
-    paddingVertical: 8,
-    paddingHorizontal: 2,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#e0e0e0',
-  },
-  reasonText: {
-    color: '#a12222',
-    fontSize: 13,
-    marginTop: 4,
-  },
-  deviceName: {
-    fontSize: 15,
-  },
-  deviceMeta: {
-    fontSize: 14,
-    marginTop: 2,
-    opacity: 0.9,
-    lineHeight: 20,
-  },
-  listEmpty: {
-    fontSize: 14,
-    opacity: 0.55,
-    fontStyle: 'italic',
+  socText: { fontWeight: '700', color: '#1b4b7a' },
+  socBarTrack: {
+    height: 8,
+    borderRadius: 999,
+    backgroundColor: '#dbe8f7',
+    overflow: 'hidden',
     marginTop: 2,
     marginBottom: 2,
+  },
+  socBarFill: {
+    height: '100%',
+    backgroundColor: '#1f7a34',
+  },
+  sectionSpacing: {
+    marginBottom: 8,
+  },
+  deviceRowCard: {
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#d0dae6',
+    borderRadius: 12,
+    backgroundColor: '#ffffff',
+    padding: 12,
+    gap: 6,
+  },
+  deviceRowTop: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  devicePowerBadge: {
+    color: '#17508d',
+    backgroundColor: '#e9f2ff',
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    fontSize: 12,
+    fontWeight: '600',
   },
 });
