@@ -1,7 +1,9 @@
+from dataclasses import dataclass
 from typing import List
 
 from ..models.device import DeviceItem
 from ..models.optimization import (
+    CannotRunItem,
     ForecastHourResult,
     ForecastPoint,
     MultiScenarioResponse,
@@ -10,8 +12,28 @@ from ..models.optimization import (
     ScenarioResult,
     WeatherInfo,
 )
+from .energy_service import get_latest_energy
 from .recommendation_service import generate_alerts
+from .solar_system_service import get_solar_system
 from .weather_service import fetch_weather_and_forecast
+
+DEV_SOLAR_USER_ID = "dev-solar-user"
+DEFAULT_BATTERY_CAPACITY_WH = 1500.0
+DEFAULT_INVERTER_MAX_POWER_W = 2000.0
+DEFAULT_SOC_PERCENT = 100.0
+MAX_WEATHER_ENERGY_SCORE = 5.0
+
+CONSTRAINT_SCHEDULE = "schedule"
+CONSTRAINT_INVERTER_POWER = "inverter_power"
+CONSTRAINT_AVAILABLE_ENERGY = "available_energy"
+
+
+@dataclass(frozen=True)
+class OptimizationConstraints:
+    """Resolved physical limits used by the rule-based optimizer."""
+
+    available_energy_wh: float
+    inverter_max_power_w: float
 
 
 def hhmm_to_minutes(hhmm: str) -> int:
@@ -31,6 +53,68 @@ def is_within_schedule(current_minutes: int, start_hhmm: str, end_hhmm: str) -> 
     return current_minutes >= start_minutes or current_minutes <= end_minutes
 
 
+def calculate_device_energy_wh(power_w: float, duration_minutes: int) -> float:
+    duration_hours = duration_minutes / 60
+    return power_w * duration_hours
+
+
+def calculate_available_energy_wh(battery_capacity_wh: float, soc_percent: float) -> float:
+    return battery_capacity_wh * (soc_percent / 100)
+
+
+def weather_energy_to_wh(weather_energy: float, battery_capacity_wh: float) -> float:
+    normalized = weather_energy / MAX_WEATHER_ENERGY_SCORE
+    return normalized * battery_capacity_wh
+
+
+def build_blocked_item(*, device: DeviceItem, blocked_reason: str, exceeded_constraint: str) -> CannotRunItem:
+    return CannotRunItem(
+        device=device,
+        reason=blocked_reason,
+        blocked_reason=blocked_reason,
+        exceeded_constraint=exceeded_constraint,
+    )
+
+
+def resolve_battery_capacity_and_inverter() -> tuple[float, float]:
+    try:
+        profile = get_solar_system(user_id=DEV_SOLAR_USER_ID)
+        if profile is not None:
+            return profile.battery_capacity_wh, profile.inverter_max_power_w
+    except Exception:
+        pass
+    return DEFAULT_BATTERY_CAPACITY_WH, DEFAULT_INVERTER_MAX_POWER_W
+
+
+def resolve_soc_percent() -> float:
+    try:
+        latest = get_latest_energy()
+        if latest is not None and latest.get("soc") is not None:
+            return float(latest["soc"])
+    except Exception:
+        pass
+    return DEFAULT_SOC_PERCENT
+
+
+def build_current_constraints(*, battery_capacity_wh: float, soc_percent: float, inverter_max_power_w: float) -> OptimizationConstraints:
+    return OptimizationConstraints(
+        available_energy_wh=calculate_available_energy_wh(battery_capacity_wh, soc_percent),
+        inverter_max_power_w=inverter_max_power_w,
+    )
+
+
+def build_forecast_constraints(
+    *,
+    weather_energy: float,
+    battery_capacity_wh: float,
+    inverter_max_power_w: float,
+) -> OptimizationConstraints:
+    return OptimizationConstraints(
+        available_energy_wh=weather_energy_to_wh(weather_energy, battery_capacity_wh),
+        inverter_max_power_w=inverter_max_power_w,
+    )
+
+
 def build_mock_12h_forecast(start_hhmm: str) -> List[ForecastPoint]:
     start_minutes = hhmm_to_minutes(start_hhmm)
     energy_curve = [5, 4, 3, 2.5, 2, 1.5, 1, 0.5, 0.5, 1, 2, 3]
@@ -44,36 +128,103 @@ def build_mock_12h_forecast(start_hhmm: str) -> List[ForecastPoint]:
     return forecast
 
 
+def validate_schedule(*, device: DeviceItem, current_minutes: int) -> CannotRunItem | None:
+    if is_within_schedule(current_minutes, device.start_time, device.end_time):
+        return None
+    return build_blocked_item(
+        device=device,
+        blocked_reason="Device is outside its allowed schedule window.",
+        exceeded_constraint=CONSTRAINT_SCHEDULE,
+    )
+
+
+def validate_inverter_power(*, device: DeviceItem, active_power_w: float, inverter_max_power_w: float) -> CannotRunItem | None:
+    projected_power_w = active_power_w + device.power
+    if projected_power_w <= inverter_max_power_w:
+        return None
+    return build_blocked_item(
+        device=device,
+        blocked_reason=(
+            f"Total active power ({projected_power_w:.0f} W) exceeds inverter limit "
+            f"({inverter_max_power_w:.0f} W)."
+        ),
+        exceeded_constraint=CONSTRAINT_INVERTER_POWER,
+    )
+
+
+def validate_available_energy(
+    *,
+    device: DeviceItem,
+    required_energy_wh: float,
+    remaining_energy_wh: float,
+) -> CannotRunItem | None:
+    if required_energy_wh <= remaining_energy_wh:
+        return None
+    return build_blocked_item(
+        device=device,
+        blocked_reason=(
+            f"Required energy ({required_energy_wh:.0f} Wh) exceeds remaining available energy "
+            f"({remaining_energy_wh:.0f} Wh)."
+        ),
+        exceeded_constraint=CONSTRAINT_AVAILABLE_ENERGY,
+    )
+
+
 def run_optimization_for_order(
     ordered_devices: List[DeviceItem],
     *,
-    available_energy: float,
+    constraints: OptimizationConstraints,
     current_minutes: int,
 ) -> OptimizeResponse:
-    remaining_energy = available_energy
+    remaining_energy_wh = constraints.available_energy_wh
+    active_power_w = 0.0
     can_run: List[DeviceItem] = []
-    cannot_run = []
+    cannot_run: List[CannotRunItem] = []
 
     for device in ordered_devices:
-        if not is_within_schedule(current_minutes, device.start_time, device.end_time):
-            cannot_run.append({"device": device, "reason": "outside schedule"})
+        schedule_violation = validate_schedule(device=device, current_minutes=current_minutes)
+        if schedule_violation is not None:
+            cannot_run.append(schedule_violation)
             continue
 
-        if device.power <= remaining_energy:
-            can_run.append(device)
-            remaining_energy -= device.power
-        else:
-            cannot_run.append({"device": device, "reason": "insufficient energy"})
+        inverter_violation = validate_inverter_power(
+            device=device,
+            active_power_w=active_power_w,
+            inverter_max_power_w=constraints.inverter_max_power_w,
+        )
+        if inverter_violation is not None:
+            cannot_run.append(inverter_violation)
+            continue
 
-    # Keep exact structure used by main.py previously via OptimizeResponse model
-    return OptimizeResponse(can_run=can_run, cannot_run=cannot_run, remaining_energy=remaining_energy)
+        device_energy_wh = calculate_device_energy_wh(device.power, device.duration)
+        energy_violation = validate_available_energy(
+            device=device,
+            required_energy_wh=device_energy_wh,
+            remaining_energy_wh=remaining_energy_wh,
+        )
+        if energy_violation is not None:
+            cannot_run.append(energy_violation)
+            continue
+
+        can_run.append(device)
+        remaining_energy_wh -= device_energy_wh
+        active_power_w += device.power
+
+    return OptimizeResponse(can_run=can_run, cannot_run=cannot_run, remaining_energy=remaining_energy_wh)
 
 
 def optimize_devices(body: OptimizeRequest) -> MultiScenarioResponse:
     fallback_time = "12:00"
+    battery_capacity_wh, inverter_max_power_w = resolve_battery_capacity_and_inverter()
+    soc_percent = resolve_soc_percent()
+    current_constraints = build_current_constraints(
+        battery_capacity_wh=battery_capacity_wh,
+        soc_percent=soc_percent,
+        inverter_max_power_w=inverter_max_power_w,
+    )
+
     try:
         weather_info, forecast_points = fetch_weather_and_forecast(body.city)
-        available_energy = weather_info.energy_estimate
         current_time_hhmm = forecast_points[0].hour
     except Exception:
         weather_info = WeatherInfo(
@@ -82,7 +233,6 @@ def optimize_devices(body: OptimizeRequest) -> MultiScenarioResponse:
             energy_estimate=3.0,
             temperature=None,
         )
-        available_energy = weather_info.energy_estimate
         current_time_hhmm = fallback_time
         forecast_points = build_mock_12h_forecast(current_time_hhmm)
 
@@ -94,26 +244,31 @@ def optimize_devices(body: OptimizeRequest) -> MultiScenarioResponse:
 
     priority_first_result = run_optimization_for_order(
         priority_first_devices,
-        available_energy=available_energy,
+        constraints=current_constraints,
         current_minutes=current_minutes,
     )
     energy_saving_result = run_optimization_for_order(
         energy_saving_devices,
-        available_energy=available_energy,
+        constraints=current_constraints,
         current_minutes=current_minutes,
     )
     performance_result = run_optimization_for_order(
         performance_devices,
-        available_energy=available_energy,
+        constraints=current_constraints,
         current_minutes=current_minutes,
     )
 
     forecast_results: List[ForecastHourResult] = []
     for point in forecast_points:
         hour_minutes = hhmm_to_minutes(point.hour)
+        hour_constraints = build_forecast_constraints(
+            weather_energy=point.energy,
+            battery_capacity_wh=battery_capacity_wh,
+            inverter_max_power_w=inverter_max_power_w,
+        )
         hour_result = run_optimization_for_order(
             priority_first_devices,
-            available_energy=point.energy,
+            constraints=hour_constraints,
             current_minutes=hour_minutes,
         )
         forecast_results.append(
@@ -132,4 +287,3 @@ def optimize_devices(body: OptimizeRequest) -> MultiScenarioResponse:
         alerts=alerts,
         weather=weather_info,
     )
-

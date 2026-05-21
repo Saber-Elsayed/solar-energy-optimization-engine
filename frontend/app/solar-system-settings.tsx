@@ -5,7 +5,6 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { CenterAutoToast } from '@/components/center-auto-toast';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
-import { authFetch } from '@/lib/api';
 
 type SolarSystemResponse = {
   id: string;
@@ -38,7 +37,7 @@ export default function SolarSystemSettingsScreen() {
   const [saveFeedback, setSaveFeedback] = useState<SaveFeedback | null>(null);
 
   const fetchProfileFromServer = useCallback(async () => {
-    const response = await authFetch(SOLAR_SYSTEM_URL);
+    const response = await fetch(SOLAR_SYSTEM_URL);
     if (response.status === 404) {
       setHasProfile(false);
       return;
@@ -95,7 +94,7 @@ export default function SolarSystemSettingsScreen() {
     setSaveFeedback(null);
     try {
       console.log('[SOLAR DEBUG] request payload:', payload);
-      const response = await authFetch(SOLAR_SYSTEM_URL, {
+      const response = await fetch(SOLAR_SYSTEM_URL, {
         method: hasProfile ? 'PUT' : 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),

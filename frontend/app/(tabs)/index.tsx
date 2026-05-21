@@ -5,7 +5,6 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
-import { authFetch } from '@/lib/api';
 
 type ApiDevice = {
   id: string;
@@ -40,7 +39,354 @@ type DeviceDecision = {
   device: ApiDevice;
   deviceEnergyWh: number;
   reason?: string;
+  constraint?: 'inverter_power' | 'available_energy';
+  remainingEnergyWhAtBlock?: number;
 };
+
+type AlternativeCombination = {
+  id: string;
+  blockedDevice: ApiDevice;
+  constraint: 'inverter_power' | 'available_energy';
+  removeDevices: ApiDevice[];
+  addDevices: ApiDevice[];
+  summary: string;
+};
+
+type DurationReductionSuggestion = {
+  id: string;
+  device: ApiDevice;
+  originalDurationMinutes: number;
+  suggestedDurationMinutes: number;
+  reduceByMinutes: number;
+  suggestedEnergyWh: number;
+  summary: string;
+};
+
+type InverterPowerCombination = {
+  id: string;
+  blockedDevice: ApiDevice;
+  devices: ApiDevice[];
+  totalPowerW: number;
+  totalEnergyWh: number;
+  summary: string;
+};
+
+const DEFAULT_INVERTER_MAX_POWER_W = 2000;
+const MAX_INVERTER_ENUM_DEVICES = 16;
+
+function deviceEnergyWh(device: ApiDevice): number {
+  return device.power * (device.duration / 60);
+}
+
+function energyForDuration(device: ApiDevice, durationMinutes: number): number {
+  return device.power * (durationMinutes / 60);
+}
+
+function maxRunnableDurationMinutes(device: ApiDevice, availableEnergyWh: number): number {
+  if (device.power <= 0 || availableEnergyWh <= 0) return 0;
+  return Math.floor((availableEnergyWh / device.power) * 60);
+}
+
+function buildDurationReductionSuggestions(blocked: DeviceDecision[]): DurationReductionSuggestion[] {
+  const suggestions: DurationReductionSuggestion[] = [];
+
+  for (const item of blocked) {
+    if (item.constraint !== 'available_energy') continue;
+
+    const remainingEnergyWh = item.remainingEnergyWhAtBlock ?? 0;
+    const originalDurationMinutes = item.device.duration;
+    const maxDurationMinutes = maxRunnableDurationMinutes(item.device, remainingEnergyWh);
+
+    if (maxDurationMinutes <= 0) {
+      const deficitWh = Math.max(0, item.deviceEnergyWh - remainingEnergyWh);
+      suggestions.push({
+        id: `${item.device.id}|none`,
+        device: item.device,
+        originalDurationMinutes,
+        suggestedDurationMinutes: 0,
+        reduceByMinutes: originalDurationMinutes,
+        suggestedEnergyWh: 0,
+        summary: `Not enough energy (${deficitWh.toFixed(0)} Wh short) to run even 1 minute.`,
+      });
+      continue;
+    }
+
+    if (maxDurationMinutes >= originalDurationMinutes) continue;
+
+    const reduceByMinutes = originalDurationMinutes - maxDurationMinutes;
+    const suggestedEnergyWh = energyForDuration(item.device, maxDurationMinutes);
+    suggestions.push({
+      id: `${item.device.id}|${maxDurationMinutes}`,
+      device: item.device,
+      originalDurationMinutes,
+      suggestedDurationMinutes: maxDurationMinutes,
+      reduceByMinutes,
+      suggestedEnergyWh,
+      summary: `Reduce usage by ${reduceByMinutes} min (${originalDurationMinutes} → ${maxDurationMinutes} min) to run within available energy (${suggestedEnergyWh.toFixed(0)} Wh).`,
+    });
+  }
+
+  return suggestions;
+}
+
+function getConstraintKind(reason?: string): 'inverter_power' | 'available_energy' | null {
+  if (reason?.includes('inverter limit')) return 'inverter_power';
+  if (
+    reason?.includes('available energy') ||
+    reason?.includes('battery capacity') ||
+    reason?.includes('Not enough')
+  ) {
+    return 'available_energy';
+  }
+  return null;
+}
+
+function combinationFits(devices: ApiDevice[], availableEnergyWh: number, inverterMaxPowerW: number): boolean {
+  const totalPower = devices.reduce((sum, device) => sum + device.power, 0);
+  const totalEnergy = devices.reduce((sum, device) => sum + deviceEnergyWh(device), 0);
+  return totalPower <= inverterMaxPowerW && totalEnergy <= availableEnergyWh;
+}
+
+function formatDeviceList(devices: ApiDevice[]): string {
+  return devices.map((device) => device.name).join(' + ');
+}
+
+function enumerateInverterCombinationsIncluding(
+  allDevices: ApiDevice[],
+  mustInclude: ApiDevice,
+  inverterMaxPowerW: number,
+  availableEnergyWh: number,
+): InverterPowerCombination[] {
+  const others = allDevices.filter((device) => device.id !== mustInclude.id);
+  if (mustInclude.power > inverterMaxPowerW) {
+    return [];
+  }
+
+  const combinations: InverterPowerCombination[] = [];
+  const subsetCount = 1 << others.length;
+
+  for (let mask = 0; mask < subsetCount; mask += 1) {
+    const subset: ApiDevice[] = [mustInclude];
+    for (let index = 0; index < others.length; index += 1) {
+      if (mask & (1 << index)) {
+        subset.push(others[index]);
+      }
+    }
+    if (!combinationFits(subset, availableEnergyWh, inverterMaxPowerW)) {
+      continue;
+    }
+    const totalPowerW = subset.reduce((sum, device) => sum + device.power, 0);
+    const totalEnergyWh = subset.reduce((sum, device) => sum + deviceEnergyWh(device), 0);
+    const companionIds = subset
+      .filter((device) => device.id !== mustInclude.id)
+      .map((device) => device.id)
+      .sort()
+      .join('+');
+    combinations.push({
+      id: `${mustInclude.id}|${companionIds || 'solo'}`,
+      blockedDevice: mustInclude,
+      devices: subset,
+      totalPowerW,
+      totalEnergyWh,
+      summary: `${formatDeviceList(subset)} (${totalPowerW.toFixed(0)} W / ${totalEnergyWh.toFixed(0)} Wh)`,
+    });
+  }
+
+  combinations.sort((a, b) => {
+    if (a.devices.length !== b.devices.length) {
+      return a.devices.length - b.devices.length;
+    }
+    return a.totalPowerW - b.totalPowerW;
+  });
+
+  return combinations;
+}
+
+function buildInverterPowerCombinations(
+  allDevices: ApiDevice[],
+  blocked: DeviceDecision[],
+  inverterMaxPowerW: number,
+  availableEnergyWh: number,
+): InverterPowerCombination[] {
+  const inverterBlocked = blocked.filter((item) => item.constraint === 'inverter_power');
+  if (inverterBlocked.length === 0 || allDevices.length === 0) {
+    return [];
+  }
+
+  const results: InverterPowerCombination[] = [];
+  const seen = new Set<string>();
+
+  for (const item of inverterBlocked) {
+    if (allDevices.length > MAX_INVERTER_ENUM_DEVICES) {
+      const soloOnly = enumerateInverterCombinationsIncluding(
+        [item.device],
+        item.device,
+        inverterMaxPowerW,
+        availableEnergyWh,
+      );
+      results.push(...soloOnly);
+      continue;
+    }
+
+    for (const combo of enumerateInverterCombinationsIncluding(
+      allDevices,
+      item.device,
+      inverterMaxPowerW,
+      availableEnergyWh,
+    )) {
+      const key = `${item.device.id}|${combo.devices
+        .map((device) => device.id)
+        .sort()
+        .join('+')}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      results.push(combo);
+    }
+  }
+
+  return results;
+}
+
+function expandBlockedDevicesIntoCombination(
+  baseDevices: ApiDevice[],
+  blockedPool: ApiDevice[],
+  availableEnergyWh: number,
+  inverterMaxPowerW: number,
+  mustInclude?: ApiDevice,
+): ApiDevice[] {
+  const added: ApiDevice[] = [];
+  let current = [...baseDevices];
+  const sortedPool = [...blockedPool].sort((a, b) => deviceEnergyWh(a) - deviceEnergyWh(b));
+
+  if (mustInclude && !current.some((device) => device.id === mustInclude.id)) {
+    if (combinationFits([...current, mustInclude], availableEnergyWh, inverterMaxPowerW)) {
+      current.push(mustInclude);
+      added.push(mustInclude);
+    } else {
+      return [];
+    }
+  }
+
+  for (const device of sortedPool) {
+    if (current.some((item) => item.id === device.id)) continue;
+    if (!combinationFits([...current, device], availableEnergyWh, inverterMaxPowerW)) continue;
+    current.push(device);
+    added.push(device);
+  }
+
+  return added;
+}
+
+function formatAlternativeSummary(removeDevices: ApiDevice[], addDevices: ApiDevice[]): string {
+  const addNames = addDevices.map((device) => device.name).join(', ');
+  if (removeDevices.length === 0) {
+    return `You can add: ${addNames}`;
+  }
+  const removeNames = removeDevices.map((device) => device.name).join(', ');
+  return `Remove ${removeNames} to run: ${addNames}`;
+}
+
+function buildAlternativeCombinations(
+  allowed: DeviceDecision[],
+  blocked: DeviceDecision[],
+  availableEnergyWh: number,
+  inverterMaxPowerW: number,
+  activePowerW: number,
+  remainingEnergyWh: number,
+): AlternativeCombination[] {
+  const allowedDevices = allowed.map((item) => item.device);
+  const removableOptional = allowedDevices.filter((device) => !device.essential);
+  const constraintBlocked = blocked.filter((item) => getConstraintKind(item.reason) !== null);
+  const blockedPool = constraintBlocked.map((item) => item.device);
+
+  if (constraintBlocked.length === 0) {
+    return [];
+  }
+
+  const suggestions: AlternativeCombination[] = [];
+  const seen = new Set<string>();
+
+  const pushSuggestion = (
+    blockedDevice: ApiDevice,
+    constraint: 'inverter_power' | 'available_energy',
+    removeDevices: ApiDevice[],
+    addDevices: ApiDevice[],
+  ) => {
+    if (addDevices.length === 0) return;
+    const key = [
+      blockedDevice.id,
+      removeDevices
+        .map((device) => device.id)
+        .sort()
+        .join('+'),
+      addDevices
+        .map((device) => device.id)
+        .sort()
+        .join('+'),
+    ].join('|');
+    if (seen.has(key)) return;
+    seen.add(key);
+    suggestions.push({
+      id: key,
+      blockedDevice,
+      constraint,
+      removeDevices,
+      addDevices,
+      summary: formatAlternativeSummary(removeDevices, addDevices),
+    });
+  };
+
+  for (const blockedItem of constraintBlocked) {
+    const target = blockedItem.device;
+    const constraint = getConstraintKind(blockedItem.reason)!;
+
+    for (const remove of removableOptional) {
+      const base = allowedDevices.filter((device) => device.id !== remove.id);
+      const addDevices = expandBlockedDevicesIntoCombination(
+        base,
+        blockedPool,
+        availableEnergyWh,
+        inverterMaxPowerW,
+        target,
+      );
+      pushSuggestion(target, constraint, [remove], addDevices);
+    }
+
+    for (let i = 0; i < removableOptional.length; i += 1) {
+      for (let j = i + 1; j < removableOptional.length; j += 1) {
+        const removeDevices = [removableOptional[i], removableOptional[j]];
+        const removeIds = new Set(removeDevices.map((device) => device.id));
+        const base = allowedDevices.filter((device) => !removeIds.has(device.id));
+        const addDevices = expandBlockedDevicesIntoCombination(
+          base,
+          blockedPool,
+          availableEnergyWh,
+          inverterMaxPowerW,
+          target,
+        );
+        pushSuggestion(target, constraint, removeDevices, addDevices);
+      }
+    }
+
+    if (
+      target.power <= inverterMaxPowerW - activePowerW &&
+      deviceEnergyWh(target) <= remainingEnergyWh
+    ) {
+      pushSuggestion(target, constraint, [], [target]);
+    }
+  }
+
+  const powerSlack = inverterMaxPowerW - activePowerW;
+  const energySlack = remainingEnergyWh;
+  for (const blockedItem of constraintBlocked) {
+    const device = blockedItem.device;
+    if (device.power > powerSlack || deviceEnergyWh(device) > energySlack) continue;
+    if (allowedDevices.some((allowedDevice) => allowedDevice.id === device.id)) continue;
+    pushSuggestion(device, getConstraintKind(blockedItem.reason)!, [], [device]);
+  }
+
+  return suggestions.slice(0, 12);
+}
 
 const DEVICES_URL = Platform.OS === 'android' ? 'http://10.0.2.2:8000/devices' : 'http://127.0.0.1:8000/devices';
 const ENERGY_LATEST_URL = Platform.OS === 'android' ? 'http://10.0.2.2:8000/energy-data/latest' : 'http://127.0.0.1:8000/energy-data/latest';
@@ -51,15 +397,16 @@ const SOLAR_SYSTEM_URL =
 
 type SolarSystemProfileResponse = {
   battery_capacity_wh: number;
+  inverter_max_power_w: number;
 };
-const RAPID_DISCHARGE_DROP = 1.5;
-const SAFE_VOLTAGE_THRESHOLD = 11.5;
 
 function optimizeDevices(
   devices: ApiDevice[],
   availableEnergyWh: number,
+  inverterMaxPowerW: number,
 ) {
   let remainingEnergyWh = availableEnergyWh;
+  let activePowerW = 0;
   const allowed: DeviceDecision[] = [];
   const blocked: DeviceDecision[] = [];
   const mandatoryDevices = devices.filter((d) => d.essential);
@@ -68,88 +415,96 @@ function optimizeDevices(
   let mandatoryEnergyWh = 0;
   let optionalEnergyWh = 0;
 
+  const evaluateDevice = (device: ApiDevice, category: 'mandatory' | 'optional') => {
+    const usageHours = device.duration / 60;
+    const requiredEnergyWh = device.power * usageHours;
+    const projectedPowerW = activePowerW + device.power;
+
+    console.log('[Optimization] Device check', {
+      device: device.name,
+      category,
+      power_w: device.power,
+      usage_time_hours: usageHours,
+      device_energy_wh: requiredEnergyWh,
+      active_power_w: activePowerW,
+      projected_power_w: projectedPowerW,
+      inverter_max_power_w: inverterMaxPowerW,
+      remaining_before_wh: remainingEnergyWh,
+    });
+
+    if (projectedPowerW > inverterMaxPowerW) {
+      blocked.push({
+        device,
+        deviceEnergyWh: requiredEnergyWh,
+        reason: `Total active power (${projectedPowerW.toFixed(0)} W) exceeds inverter limit (${inverterMaxPowerW.toFixed(0)} W).`,
+        constraint: 'inverter_power',
+      });
+      console.log('[Optimization] Decision', {
+        device: device.name,
+        decision: 'blocked',
+        category,
+        reason: 'inverter_power',
+      });
+      return;
+    }
+
+    if (requiredEnergyWh > remainingEnergyWh) {
+      blocked.push({
+        device,
+        deviceEnergyWh: requiredEnergyWh,
+        reason: device.essential
+          ? 'Not enough available energy'
+          : 'Exceeds remaining battery capacity',
+        constraint: 'available_energy',
+        remainingEnergyWhAtBlock: remainingEnergyWh,
+      });
+      console.log('[Optimization] Decision', {
+        device: device.name,
+        decision: 'blocked',
+        category,
+        reason: 'available_energy',
+      });
+      return;
+    }
+
+    allowed.push({ device, deviceEnergyWh: requiredEnergyWh });
+    remainingEnergyWh -= requiredEnergyWh;
+    activePowerW += device.power;
+    console.log('[Optimization] Decision', {
+      device: device.name,
+      decision: 'allowed',
+      category,
+      active_power_after_w: activePowerW,
+      remaining_after_wh: remainingEnergyWh,
+    });
+  };
+
   console.log('[Optimization] New cycle start', {
     available_energy_wh: availableEnergyWh,
+    inverter_max_power_w: inverterMaxPowerW,
     device_count: devices.length,
     mandatory_count: mandatoryDevices.length,
     optional_count: optionalDevices.length,
   });
 
   for (const device of mandatoryDevices) {
-    const usageHours = device.duration / 60;
-    const requiredEnergyWh = device.power * usageHours;
+    const requiredEnergyWh = device.power * (device.duration / 60);
     totalDeviceEnergyWh += requiredEnergyWh;
     mandatoryEnergyWh += requiredEnergyWh;
-    console.log('[Optimization] Device energy check', {
-      device: device.name,
-      category: 'mandatory',
-      power_w: device.power,
-      usage_time_hours: usageHours,
-      device_energy_wh: requiredEnergyWh,
-      remaining_before_wh: remainingEnergyWh,
-    });
-
-    if (requiredEnergyWh <= remainingEnergyWh) {
-      allowed.push({ device, deviceEnergyWh: requiredEnergyWh });
-      remainingEnergyWh -= requiredEnergyWh;
-      console.log('[Optimization] Decision', {
-        device: device.name,
-        decision: 'allowed',
-        category: 'mandatory',
-        remaining_after_wh: remainingEnergyWh,
-      });
-    } else {
-      blocked.push({ device, deviceEnergyWh: requiredEnergyWh, reason: 'Not enough available energy' });
-      console.log('[Optimization] Decision', {
-        device: device.name,
-        decision: 'blocked',
-        category: 'mandatory',
-        reason: 'Not enough available energy',
-        remaining_after_wh: remainingEnergyWh,
-      });
-    }
+    evaluateDevice(device, 'mandatory');
   }
 
   const optionalWithEnergy = optionalDevices
-    .map((device) => {
-      const usageHours = device.duration / 60;
-      const requiredEnergyWh = device.power * usageHours;
-      return { device, requiredEnergyWh, usageHours };
-    })
+    .map((device) => ({
+      device,
+      requiredEnergyWh: device.power * (device.duration / 60),
+    }))
     .sort((a, b) => a.requiredEnergyWh - b.requiredEnergyWh);
 
   for (const item of optionalWithEnergy) {
-    const { device, requiredEnergyWh, usageHours } = item;
-    totalDeviceEnergyWh += requiredEnergyWh;
-    optionalEnergyWh += requiredEnergyWh;
-    console.log('[Optimization] Device energy check', {
-      device: device.name,
-      category: 'optional',
-      power_w: device.power,
-      usage_time_hours: usageHours,
-      device_energy_wh: requiredEnergyWh,
-      remaining_before_wh: remainingEnergyWh,
-    });
-
-    if (requiredEnergyWh <= remainingEnergyWh) {
-      allowed.push({ device, deviceEnergyWh: requiredEnergyWh });
-      remainingEnergyWh -= requiredEnergyWh;
-      console.log('[Optimization] Decision', {
-        device: device.name,
-        decision: 'allowed',
-        category: 'optional',
-        remaining_after_wh: remainingEnergyWh,
-      });
-    } else {
-      blocked.push({ device, deviceEnergyWh: requiredEnergyWh, reason: 'Exceeds remaining battery capacity' });
-      console.log('[Optimization] Decision', {
-        device: device.name,
-        decision: 'blocked',
-        category: 'optional',
-        reason: 'Exceeds remaining battery capacity',
-        remaining_after_wh: remainingEnergyWh,
-      });
-    }
+    totalDeviceEnergyWh += item.requiredEnergyWh;
+    optionalEnergyWh += item.requiredEnergyWh;
+    evaluateDevice(item.device, 'optional');
   }
 
   const blockedMandatoryCount = blocked.filter((item) => item.device.essential).length;
@@ -159,6 +514,7 @@ function optimizeDevices(
     total_device_energy_wh: totalDeviceEnergyWh,
     mandatory_energy_wh: mandatoryEnergyWh,
     optional_energy_wh: optionalEnergyWh,
+    active_power_w: activePowerW,
     remaining_energy_wh: remainingEnergyWh,
     allowed_count: allowed.length,
     blocked_count: blocked.length,
@@ -166,12 +522,32 @@ function optimizeDevices(
     blocked_optional_count: blockedOptionalCount,
   });
 
+  const alternatives = buildAlternativeCombinations(
+    allowed,
+    blocked,
+    availableEnergyWh,
+    inverterMaxPowerW,
+    activePowerW,
+    remainingEnergyWh,
+  );
+  const durationSuggestions = buildDurationReductionSuggestions(blocked);
+  const inverterCombinations = buildInverterPowerCombinations(
+    devices,
+    blocked,
+    inverterMaxPowerW,
+    availableEnergyWh,
+  );
+
   return {
     allowed,
     blocked,
     remainingEnergyWh,
+    activePowerW,
     blockedMandatoryCount,
     blockedOptionalCount,
+    alternatives,
+    durationSuggestions,
+    inverterCombinations,
   };
 }
 
@@ -190,6 +566,8 @@ export default function HomeScreen() {
   const [weather, setWeather] = useState<OptimizeWeather | null>(null);
   const [batteryCapacityWhValue, setBatteryCapacityWhValue] = useState(0);
   const batteryCapacityWhRef = useRef(0);
+  const [inverterMaxPowerWValue, setInverterMaxPowerWValue] = useState(DEFAULT_INVERTER_MAX_POWER_W);
+  const inverterMaxPowerWRef = useRef(DEFAULT_INVERTER_MAX_POWER_W);
   const [weatherLoading, setWeatherLoading] = useState(false);
 
   const voltage = typeof battery?.voltage === 'number' ? battery.voltage : 0;
@@ -203,8 +581,8 @@ export default function HomeScreen() {
     return batteryCapacityWhValue;
   }, [batteryCapacityWhValue, soc, socNormalized]);
   const optimization = useMemo(
-    () => optimizeDevices(devices, availableEnergyWh),
-    [devices, availableEnergyWh],
+    () => optimizeDevices(devices, availableEnergyWh, inverterMaxPowerWValue),
+    [devices, availableEnergyWh, inverterMaxPowerWValue],
   );
 
   const evaluateAlerts = (latestSoc: number | undefined, latestAvailableEnergyWh: number) => {
@@ -227,28 +605,42 @@ export default function HomeScreen() {
     if (optimization.blockedOptionalCount > 0) {
       dynamicAlerts.push('Optional devices limited due to energy constraints');
     }
+    const blockedByInverter = optimization.blocked.some((item) =>
+      item.reason?.includes('exceeds inverter limit'),
+    );
+    if (blockedByInverter) {
+      dynamicAlerts.push('⚠️ Some devices blocked due to inverter power limit');
+    }
     setAlerts(dynamicAlerts);
   };
 
   const fetchDashboardData = async () => {
     try {
       let capacityWhForCalc = batteryCapacityWhRef.current;
+      let inverterMaxPowerWForCalc = inverterMaxPowerWRef.current;
 
       try {
-        const solarRes = await authFetch(SOLAR_SYSTEM_URL);
+        const solarRes = await fetch(`${SOLAR_SYSTEM_URL}?t=${Date.now()}`);
         if (solarRes.status === 404) {
           capacityWhForCalc = 0;
+          inverterMaxPowerWForCalc = DEFAULT_INVERTER_MAX_POWER_W;
         } else if (solarRes.ok) {
           const profile = (await solarRes.json()) as SolarSystemProfileResponse;
-          const parsed = Number(profile.battery_capacity_wh);
-          capacityWhForCalc = !Number.isNaN(parsed) && parsed > 0 ? parsed : 0;
+          const parsedCapacity = Number(profile.battery_capacity_wh);
+          const parsedInverter = Number(profile.inverter_max_power_w);
+          capacityWhForCalc = !Number.isNaN(parsedCapacity) && parsedCapacity > 0 ? parsedCapacity : 0;
+          inverterMaxPowerWForCalc =
+            !Number.isNaN(parsedInverter) && parsedInverter > 0 ? parsedInverter : DEFAULT_INVERTER_MAX_POWER_W;
         }
       } catch {
         capacityWhForCalc = batteryCapacityWhRef.current;
+        inverterMaxPowerWForCalc = inverterMaxPowerWRef.current;
       }
 
       batteryCapacityWhRef.current = capacityWhForCalc;
+      inverterMaxPowerWRef.current = inverterMaxPowerWForCalc;
       setBatteryCapacityWhValue(capacityWhForCalc);
+      setInverterMaxPowerWValue(inverterMaxPowerWForCalc);
 
       const [devicesRes, energyRes] = await Promise.all([
         fetch(`${DEVICES_URL}?t=${Date.now()}`),
@@ -408,6 +800,9 @@ export default function HomeScreen() {
 
           <ThemedView style={[styles.card, styles.safeGreen]}>
             <ThemedText type="subtitle">Optimization Results</ThemedText>
+            <ThemedText style={styles.muted}>
+              Inverter limit: {inverterMaxPowerWValue.toFixed(0)} W · Active load: {optimization.activePowerW.toFixed(0)} W
+            </ThemedText>
             <ThemedText type="defaultSemiBold">Allowed Devices ({optimization.allowed.length})</ThemedText>
             {optimization.allowed.length === 0 ? (
               <ThemedText style={styles.muted}>No devices can run now.</ThemedText>
@@ -431,6 +826,99 @@ export default function HomeScreen() {
                 </ThemedText>
               ))
             )}
+
+            {optimization.inverterCombinations.length > 0 ? (
+              <>
+                <ThemedText type="defaultSemiBold" style={styles.blockedTitle}>
+                  Possible Inverter Combinations
+                </ThemedText>
+                <ThemedText style={styles.muted}>
+                  All device sets that include the blocked product and stay within the inverter limit (
+                  {inverterMaxPowerWValue.toFixed(0)} W):
+                </ThemedText>
+                {Array.from(
+                  optimization.inverterCombinations.reduce((groups, combo) => {
+                    const list = groups.get(combo.blockedDevice.id) ?? [];
+                    list.push(combo);
+                    groups.set(combo.blockedDevice.id, list);
+                    return groups;
+                  }, new Map<string, typeof optimization.inverterCombinations>()),
+                ).map(([blockedId, combos]) => (
+                  <ThemedView key={`inverter-group-${blockedId}`} style={styles.inverterGroupCard}>
+                    <ThemedText type="defaultSemiBold">With {combos[0].blockedDevice.name}</ThemedText>
+                    {combos.map((combo, index) => (
+                      <ThemedView
+                        key={combo.id}
+                        style={[styles.inverterComboRow, index === 0 && styles.inverterComboRowFirst]}
+                      >
+                        <ThemedText>
+                          {index + 1}. {combo.summary}
+                        </ThemedText>
+                        <ThemedText style={styles.muted}>
+                          {combo.devices.length} device{combo.devices.length === 1 ? '' : 's'} · headroom{' '}
+                          {(inverterMaxPowerWValue - combo.totalPowerW).toFixed(0)} W
+                        </ThemedText>
+                      </ThemedView>
+                    ))}
+                  </ThemedView>
+                ))}
+              </>
+            ) : null}
+
+            {optimization.alternatives.length > 0 ? (
+              <>
+                <ThemedText type="defaultSemiBold" style={styles.blockedTitle}>
+                  Swap Suggestions
+                </ThemedText>
+                <ThemedText style={styles.muted}>
+                  Replace currently allowed devices to free inverter or energy capacity:
+                </ThemedText>
+                {optimization.alternatives.map((option) => (
+                  <ThemedView key={option.id} style={styles.alternativeCard}>
+                    <ThemedText type="defaultSemiBold">
+                      For {option.blockedDevice.name} (
+                      {option.constraint === 'inverter_power' ? 'inverter limit' : 'energy limit'})
+                    </ThemedText>
+                    <ThemedText>{option.summary}</ThemedText>
+                    {option.removeDevices.length > 0 ? (
+                      <ThemedText style={styles.muted}>
+                        Frees {option.removeDevices.reduce((sum, device) => sum + device.power, 0).toFixed(0)} W /{' '}
+                        {option.removeDevices.reduce((sum, device) => sum + deviceEnergyWh(device), 0).toFixed(0)} Wh
+                      </ThemedText>
+                    ) : (
+                      <ThemedText style={styles.muted}>
+                        Uses remaining headroom ({(inverterMaxPowerWValue - optimization.activePowerW).toFixed(0)} W /{' '}
+                        {optimization.remainingEnergyWh.toFixed(0)} Wh available)
+                      </ThemedText>
+                    )}
+                  </ThemedView>
+                ))}
+              </>
+            ) : null}
+
+            {optimization.durationSuggestions.length > 0 ? (
+              <>
+                <ThemedText type="defaultSemiBold" style={styles.blockedTitle}>
+                  Duration Reduction Options
+                </ThemedText>
+                <ThemedText style={styles.muted}>
+                  Shorten runtime to fit within available energy:
+                </ThemedText>
+                {optimization.durationSuggestions.map((option) => (
+                  <ThemedView key={option.id} style={styles.durationCard}>
+                    <ThemedText type="defaultSemiBold">{option.device.name}</ThemedText>
+                    <ThemedText>{option.summary}</ThemedText>
+                    {option.suggestedDurationMinutes > 0 ? (
+                      <ThemedText style={styles.muted}>
+                        Planned: {option.originalDurationMinutes} min (
+                        {energyForDuration(option.device, option.originalDurationMinutes).toFixed(0)} Wh) · Suggested:{' '}
+                        {option.suggestedDurationMinutes} min ({option.suggestedEnergyWh.toFixed(0)} Wh)
+                      </ThemedText>
+                    ) : null}
+                  </ThemedView>
+                ))}
+              </>
+            ) : null}
           </ThemedView>
         </ThemedView>
 
@@ -589,6 +1077,40 @@ const styles = StyleSheet.create({
   },
   muted: { opacity: 0.7 },
   blockedTitle: { marginTop: 10 },
+  alternativeCard: {
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#b8dcc0',
+    borderRadius: 8,
+    backgroundColor: '#f7fcf8',
+    padding: 10,
+    gap: 4,
+  },
+  durationCard: {
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#c9d8f5',
+    borderRadius: 8,
+    backgroundColor: '#f3f8ff',
+    padding: 10,
+    gap: 4,
+  },
+  inverterGroupCard: {
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#d4c4a8',
+    borderRadius: 8,
+    backgroundColor: '#fffaf0',
+    padding: 10,
+    gap: 6,
+  },
+  inverterComboRow: {
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: '#ebe3d4',
+    paddingTop: 6,
+    gap: 2,
+  },
+  inverterComboRowFirst: {
+    borderTopWidth: 0,
+    paddingTop: 0,
+  },
   socText: { fontWeight: '700', color: '#1b4b7a' },
   socBarTrack: {
     height: 8,

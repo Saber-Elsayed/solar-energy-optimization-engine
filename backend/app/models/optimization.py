@@ -22,6 +22,14 @@ class CannotRunItem(BaseModel):
 
     device: DeviceItem
     reason: str = Field(..., description="Reason the device cannot run right now.")
+    blocked_reason: str = Field(
+        ...,
+        description="Human-readable explanation for why the device was blocked.",
+    )
+    exceeded_constraint: str = Field(
+        ...,
+        description="Constraint identifier that was violated (e.g. schedule, inverter_power, available_energy).",
+    )
 
 
 class OptimizeResponse(BaseModel):
