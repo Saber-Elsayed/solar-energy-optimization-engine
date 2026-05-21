@@ -66,18 +66,42 @@ type InverterPowerSet = {
   id: string;
   devices: ApiDevice[];
   totalPowerW: number;
+  essentialCount: number;
+  optionalCount: number;
   summary: string;
 };
 
 type InverterPowerCatalog = {
-  valid: InverterPowerSet[];
+  essentialOnly: InverterPowerSet[];
+  optionalOnly: InverterPowerSet[];
+  essentialWithOptional: InverterPowerSet[];
   invalid: InverterPowerSet[];
   tooManyDevices: boolean;
 };
 
+type EnergyCombinationSet = {
+  id: string;
+  devices: ApiDevice[];
+  totalEnergyWh: number;
+  essentialCount: number;
+  optionalCount: number;
+  kind: 'essential_only' | 'essential_with_optional' | 'invalid';
+  summary: string;
+};
+
+type EnergyCombinationCatalog = {
+  essentialOnly: EnergyCombinationSet[];
+  essentialWithOptional: EnergyCombinationSet[];
+  invalid: EnergyCombinationSet[];
+  tooManyDevices: boolean;
+  noEnergyAvailable: boolean;
+};
+
 const DEFAULT_INVERTER_MAX_POWER_W = 2000;
 const MAX_INVERTER_ENUM_DEVICES = 14;
+const MAX_ENERGY_ENUM_DEVICES = 14;
 const INITIAL_INVERTER_COMBOS_SHOWN = 4;
+const INITIAL_ENERGY_COMBOS_SHOWN = 4;
 
 type InverterComboListProps = {
   combos: InverterPowerSet[];
@@ -86,6 +110,62 @@ type InverterComboListProps = {
   showAll: boolean;
   onToggleShowAll: () => void;
 };
+
+type EnergyComboListProps = {
+  combos: EnergyCombinationSet[];
+  variant: 'valid' | 'invalid';
+  availableEnergyWh: number;
+  showAll: boolean;
+  onToggleShowAll: () => void;
+};
+
+function EnergyComboList({ combos, variant, availableEnergyWh, showAll, onToggleShowAll }: EnergyComboListProps) {
+  if (combos.length === 0) {
+    return null;
+  }
+
+  const visibleCombos = showAll ? combos : combos.slice(0, INITIAL_ENERGY_COMBOS_SHOWN);
+  const hiddenCount = Math.max(0, combos.length - INITIAL_ENERGY_COMBOS_SHOWN);
+  const frameStyle = variant === 'valid' ? styles.energyComboFrameValid : styles.energyComboFrameInvalid;
+  const titleStyle = variant === 'valid' ? styles.energyValidText : styles.energyInvalidText;
+
+  return (
+    <ThemedView style={styles.inverterComboList}>
+      {visibleCombos.map((combo) => (
+        <ThemedView key={`energy-${variant}-${combo.id}`} style={frameStyle}>
+          <ThemedText type="defaultSemiBold" style={titleStyle}>
+            {combo.summary}
+          </ThemedText>
+          <ThemedText style={styles.muted}>
+            {combo.essentialCount} required · {combo.optionalCount} optional · {combo.devices.length} device
+            {combo.devices.length === 1 ? '' : 's'}
+            {variant === 'valid'
+              ? ` · headroom ${(availableEnergyWh - combo.totalEnergyWh).toFixed(0)} Wh`
+              : ` · exceeds by ${(combo.totalEnergyWh - availableEnergyWh).toFixed(0)} Wh`}
+          </ThemedText>
+        </ThemedView>
+      ))}
+
+      {!showAll && hiddenCount > 0 ? (
+        <Pressable
+          style={({ pressed }) => [styles.showAllButton, pressed && styles.buttonPressed]}
+          onPress={onToggleShowAll}
+        >
+          <Text style={styles.showAllButtonText}>Show all ({hiddenCount} more)</Text>
+        </Pressable>
+      ) : null}
+
+      {showAll && combos.length > INITIAL_ENERGY_COMBOS_SHOWN ? (
+        <Pressable
+          style={({ pressed }) => [styles.showAllButton, pressed && styles.buttonPressed]}
+          onPress={onToggleShowAll}
+        >
+          <Text style={styles.showAllButtonText}>Show less</Text>
+        </Pressable>
+      ) : null}
+    </ThemedView>
+  );
+}
 
 function InverterComboList({ combos, variant, inverterMaxPowerW, showAll, onToggleShowAll }: InverterComboListProps) {
   if (combos.length === 0) {
@@ -105,7 +185,8 @@ function InverterComboList({ combos, variant, inverterMaxPowerW, showAll, onTogg
             {combo.summary}
           </ThemedText>
           <ThemedText style={styles.muted}>
-            {combo.devices.length} device{combo.devices.length === 1 ? '' : 's'}
+            {combo.essentialCount} required · {combo.optionalCount} optional · {combo.devices.length} device
+            {combo.devices.length === 1 ? '' : 's'}
             {variant === 'valid'
               ? ` · headroom ${(inverterMaxPowerW - combo.totalPowerW).toFixed(0)} W`
               : ` · exceeds by ${(combo.totalPowerW - inverterMaxPowerW).toFixed(0)} W`}
@@ -222,15 +303,49 @@ function buildDevicesCatalogSignature(devices: ApiDevice[]): string {
     .join('|');
 }
 
-function buildInverterPowerCatalog(devices: ApiDevice[], inverterMaxPowerW: number): InverterPowerCatalog {
-  if (devices.length === 0) {
-    return { valid: [], invalid: [], tooManyDevices: false };
+function formatInverterCombinationSummary(devices: ApiDevice[]): string {
+  const essentialParts = devices
+    .filter((device) => device.essential)
+    .map((device) => `${device.name} (${device.power} W)`);
+  const optionalParts = devices
+    .filter((device) => !device.essential)
+    .map((device) => `${device.name} (${device.power} W)`);
+
+  const segments: string[] = [];
+  if (essentialParts.length > 0) {
+    segments.push(`Required: ${essentialParts.join(', ')}`);
   }
-  if (devices.length > MAX_INVERTER_ENUM_DEVICES) {
-    return { valid: [], invalid: [], tooManyDevices: true };
+  if (optionalParts.length > 0) {
+    segments.push(`Optional: ${optionalParts.join(', ')}`);
   }
 
-  const valid: InverterPowerSet[] = [];
+  const totalPowerW = combinationTotalPowerW(devices);
+  return `${segments.join(' · ')} — ${totalPowerW.toFixed(0)} W`;
+}
+
+function buildInverterPowerCatalog(devices: ApiDevice[], inverterMaxPowerW: number): InverterPowerCatalog {
+  if (devices.length === 0) {
+    return {
+      essentialOnly: [],
+      optionalOnly: [],
+      essentialWithOptional: [],
+      invalid: [],
+      tooManyDevices: false,
+    };
+  }
+  if (devices.length > MAX_INVERTER_ENUM_DEVICES) {
+    return {
+      essentialOnly: [],
+      optionalOnly: [],
+      essentialWithOptional: [],
+      invalid: [],
+      tooManyDevices: true,
+    };
+  }
+
+  const essentialOnly: InverterPowerSet[] = [];
+  const optionalOnly: InverterPowerSet[] = [];
+  const essentialWithOptional: InverterPowerSet[] = [];
   const invalid: InverterPowerSet[] = [];
   const subsetCount = 1 << devices.length;
 
@@ -242,6 +357,8 @@ function buildInverterPowerCatalog(devices: ApiDevice[], inverterMaxPowerW: numb
       }
     }
     const totalPowerW = combinationTotalPowerW(subset);
+    const essentialCount = subset.filter((device) => device.essential).length;
+    const optionalCount = subset.length - essentialCount;
     const id = subset
       .map((device) => device.id)
       .sort()
@@ -250,12 +367,22 @@ function buildInverterPowerCatalog(devices: ApiDevice[], inverterMaxPowerW: numb
       id,
       devices: subset,
       totalPowerW,
-      summary: `${formatDeviceList(subset)} (${totalPowerW.toFixed(0)} W)`,
+      essentialCount,
+      optionalCount,
+      summary: formatInverterCombinationSummary(subset),
     };
-    if (totalPowerW <= inverterMaxPowerW) {
-      valid.push(entry);
-    } else {
+
+    if (totalPowerW > inverterMaxPowerW) {
       invalid.push(entry);
+      continue;
+    }
+
+    if (optionalCount === 0) {
+      essentialOnly.push(entry);
+    } else if (essentialCount === 0) {
+      optionalOnly.push(entry);
+    } else {
+      essentialWithOptional.push(entry);
     }
   }
 
@@ -266,10 +393,162 @@ function buildInverterPowerCatalog(devices: ApiDevice[], inverterMaxPowerW: numb
     return a.totalPowerW - b.totalPowerW;
   };
 
-  valid.sort(sortBySizeThenPower);
+  essentialOnly.sort(sortBySizeThenPower);
+  optionalOnly.sort(sortBySizeThenPower);
+  essentialWithOptional.sort(sortBySizeThenPower);
   invalid.sort((a, b) => b.totalPowerW - a.totalPowerW);
 
-  return { valid, invalid, tooManyDevices: false };
+  return {
+    essentialOnly,
+    optionalOnly,
+    essentialWithOptional,
+    invalid,
+    tooManyDevices: false,
+  };
+}
+
+function combinationTotalEnergyWh(devices: ApiDevice[]): number {
+  return devices.reduce((sum, device) => sum + deviceEnergyWh(device), 0);
+}
+
+function passesEssentialOptionalRule(devices: ApiDevice[]): boolean {
+  const hasOptional = devices.some((device) => !device.essential);
+  if (!hasOptional) {
+    return true;
+  }
+  return devices.some((device) => device.essential);
+}
+
+function formatEnergyCombinationSummary(devices: ApiDevice[]): string {
+  const essentialParts = devices
+    .filter((device) => device.essential)
+    .map((device) => `${device.name} (${device.duration} min, ${deviceEnergyWh(device).toFixed(0)} Wh)`);
+  const optionalParts = devices
+    .filter((device) => !device.essential)
+    .map((device) => `${device.name} (${device.duration} min, ${deviceEnergyWh(device).toFixed(0)} Wh)`);
+
+  const segments: string[] = [];
+  if (essentialParts.length > 0) {
+    segments.push(`Required: ${essentialParts.join(', ')}`);
+  }
+  if (optionalParts.length > 0) {
+    segments.push(`Optional: ${optionalParts.join(', ')}`);
+  }
+
+  const totalEnergyWh = combinationTotalEnergyWh(devices);
+  return `${segments.join(' · ')} — ${totalEnergyWh.toFixed(0)} Wh`;
+}
+
+function buildEnergyCombinationCatalog(
+  devices: ApiDevice[],
+  availableEnergyWh: number,
+): EnergyCombinationCatalog {
+  if (devices.length === 0) {
+    return {
+      essentialOnly: [],
+      essentialWithOptional: [],
+      invalid: [],
+      tooManyDevices: false,
+      noEnergyAvailable: availableEnergyWh <= 0,
+    };
+  }
+  if (availableEnergyWh <= 0) {
+    return {
+      essentialOnly: [],
+      essentialWithOptional: [],
+      invalid: [],
+      tooManyDevices: false,
+      noEnergyAvailable: true,
+    };
+  }
+  if (devices.length > MAX_ENERGY_ENUM_DEVICES) {
+    return {
+      essentialOnly: [],
+      essentialWithOptional: [],
+      invalid: [],
+      tooManyDevices: true,
+      noEnergyAvailable: false,
+    };
+  }
+
+  const essentialOnly: EnergyCombinationSet[] = [];
+  const essentialWithOptional: EnergyCombinationSet[] = [];
+  const invalid: EnergyCombinationSet[] = [];
+  const subsetCount = 1 << devices.length;
+
+  for (let mask = 1; mask < subsetCount; mask += 1) {
+    const subset: ApiDevice[] = [];
+    for (let index = 0; index < devices.length; index += 1) {
+      if (mask & (1 << index)) {
+        subset.push(devices[index]);
+      }
+    }
+
+    const totalEnergyWh = combinationTotalEnergyWh(subset);
+    const essentialCount = subset.filter((device) => device.essential).length;
+    const optionalCount = subset.length - essentialCount;
+    const id = subset
+      .map((device) => device.id)
+      .sort()
+      .join('+');
+    const fitsEnergy = totalEnergyWh <= availableEnergyWh;
+    const fitsEssentialRule = passesEssentialOptionalRule(subset);
+
+    if (!fitsEnergy || !fitsEssentialRule) {
+      const reasons: string[] = [];
+      if (!fitsEnergy) {
+        reasons.push(`exceeds available energy by ${(totalEnergyWh - availableEnergyWh).toFixed(0)} Wh`);
+      }
+      if (!fitsEssentialRule) {
+        reasons.push('optional devices must run with at least one required device');
+      }
+      invalid.push({
+        id,
+        devices: subset,
+        totalEnergyWh,
+        essentialCount,
+        optionalCount,
+        kind: 'invalid',
+        summary: `${formatEnergyCombinationSummary(subset)} (${reasons.join('; ')})`,
+      });
+      continue;
+    }
+
+    const entry: EnergyCombinationSet = {
+      id,
+      devices: subset,
+      totalEnergyWh,
+      essentialCount,
+      optionalCount,
+      kind: optionalCount === 0 ? 'essential_only' : 'essential_with_optional',
+      summary: formatEnergyCombinationSummary(subset),
+    };
+
+    if (optionalCount === 0) {
+      essentialOnly.push(entry);
+    } else {
+      essentialWithOptional.push(entry);
+    }
+  }
+
+  const sortEnergySets = (a: EnergyCombinationSet, b: EnergyCombinationSet) => {
+    if (a.devices.length !== b.devices.length) {
+      return a.devices.length - b.devices.length;
+    }
+    return a.totalEnergyWh - b.totalEnergyWh;
+  };
+
+  essentialOnly.sort(sortEnergySets);
+  essentialWithOptional.sort(sortEnergySets);
+  invalid.sort((a, b) => b.totalEnergyWh - a.totalEnergyWh);
+
+  return {
+    essentialOnly,
+    essentialWithOptional,
+    invalid,
+    tooManyDevices: false,
+    noEnergyAvailable: false,
+  };
 }
 
 function expandBlockedDevicesIntoCombination(
@@ -587,8 +866,13 @@ export default function HomeScreen() {
   const [inverterMaxPowerWValue, setInverterMaxPowerWValue] = useState(DEFAULT_INVERTER_MAX_POWER_W);
   const inverterMaxPowerWRef = useRef(DEFAULT_INVERTER_MAX_POWER_W);
   const [weatherLoading, setWeatherLoading] = useState(false);
-  const [showAllValidCombos, setShowAllValidCombos] = useState(false);
+  const [showAllInverterEssentialOnly, setShowAllInverterEssentialOnly] = useState(false);
+  const [showAllInverterOptionalOnly, setShowAllInverterOptionalOnly] = useState(false);
+  const [showAllInverterEssentialOptional, setShowAllInverterEssentialOptional] = useState(false);
   const [showAllInvalidCombos, setShowAllInvalidCombos] = useState(false);
+  const [showAllEnergyEssentialOnly, setShowAllEnergyEssentialOnly] = useState(false);
+  const [showAllEnergyEssentialOptional, setShowAllEnergyEssentialOptional] = useState(false);
+  const [showAllEnergyInvalid, setShowAllEnergyInvalid] = useState(false);
 
   const voltage = typeof battery?.voltage === 'number' ? battery.voltage : 0;
   const current = typeof battery?.current === 'number' ? battery.current : 0;
@@ -609,11 +893,27 @@ export default function HomeScreen() {
     [devices, inverterMaxPowerWValue],
   );
   const devicesCatalogSignature = useMemo(() => buildDevicesCatalogSignature(devices), [devices]);
+  const energyCatalogSignature = useMemo(
+    () => `${devicesCatalogSignature}|${availableEnergyWh.toFixed(1)}`,
+    [devicesCatalogSignature, availableEnergyWh],
+  );
+  const energyCombinationCatalog = useMemo(
+    () => buildEnergyCombinationCatalog(devices, availableEnergyWh),
+    [devices, availableEnergyWh],
+  );
 
   useEffect(() => {
-    setShowAllValidCombos(false);
+    setShowAllInverterEssentialOnly(false);
+    setShowAllInverterOptionalOnly(false);
+    setShowAllInverterEssentialOptional(false);
     setShowAllInvalidCombos(false);
   }, [devicesCatalogSignature, inverterMaxPowerWValue]);
+
+  useEffect(() => {
+    setShowAllEnergyEssentialOnly(false);
+    setShowAllEnergyEssentialOptional(false);
+    setShowAllEnergyInvalid(false);
+  }, [energyCatalogSignature]);
 
   const evaluateAlerts = (latestSoc: number | undefined, latestAvailableEnergyWh: number) => {
     const dynamicAlerts: string[] = [];
@@ -852,17 +1152,49 @@ export default function HomeScreen() {
               ) : (
                 <>
                   <ThemedText type="defaultSemiBold" style={styles.inverterSectionTitle}>
-                    Can run together ({inverterPowerCatalog.valid.length})
+                    Required only ({inverterPowerCatalog.essentialOnly.length})
                   </ThemedText>
-                  {inverterPowerCatalog.valid.length === 0 ? (
-                    <ThemedText style={styles.muted}>No combination fits within the inverter limit.</ThemedText>
+                  {inverterPowerCatalog.essentialOnly.length === 0 ? (
+                    <ThemedText style={styles.muted}>No required-only combination fits the inverter limit.</ThemedText>
                   ) : (
                     <InverterComboList
-                      combos={inverterPowerCatalog.valid}
+                      combos={inverterPowerCatalog.essentialOnly}
                       variant="valid"
                       inverterMaxPowerW={inverterMaxPowerWValue}
-                      showAll={showAllValidCombos}
-                      onToggleShowAll={() => setShowAllValidCombos((prev) => !prev)}
+                      showAll={showAllInverterEssentialOnly}
+                      onToggleShowAll={() => setShowAllInverterEssentialOnly((prev) => !prev)}
+                    />
+                  )}
+
+                  <ThemedText type="defaultSemiBold" style={styles.inverterSectionTitle}>
+                    Optional only ({inverterPowerCatalog.optionalOnly.length})
+                  </ThemedText>
+                  {inverterPowerCatalog.optionalOnly.length === 0 ? (
+                    <ThemedText style={styles.muted}>No optional-only combination fits the inverter limit.</ThemedText>
+                  ) : (
+                    <InverterComboList
+                      combos={inverterPowerCatalog.optionalOnly}
+                      variant="valid"
+                      inverterMaxPowerW={inverterMaxPowerWValue}
+                      showAll={showAllInverterOptionalOnly}
+                      onToggleShowAll={() => setShowAllInverterOptionalOnly((prev) => !prev)}
+                    />
+                  )}
+
+                  <ThemedText type="defaultSemiBold" style={styles.inverterSectionTitle}>
+                    Required + Optional ({inverterPowerCatalog.essentialWithOptional.length})
+                  </ThemedText>
+                  {inverterPowerCatalog.essentialWithOptional.length === 0 ? (
+                    <ThemedText style={styles.muted}>
+                      No required + optional combination fits the inverter limit.
+                    </ThemedText>
+                  ) : (
+                    <InverterComboList
+                      combos={inverterPowerCatalog.essentialWithOptional}
+                      variant="valid"
+                      inverterMaxPowerW={inverterMaxPowerWValue}
+                      showAll={showAllInverterEssentialOptional}
+                      onToggleShowAll={() => setShowAllInverterEssentialOptional((prev) => !prev)}
                     />
                   )}
 
@@ -885,6 +1217,7 @@ export default function HomeScreen() {
             </ThemedView>
           </ThemedView>
 
+          <ThemedView style={styles.optimizationColumn}>
           <ThemedView style={[styles.card, styles.safeGreen]}>
             <ThemedText type="subtitle">Optimization Results</ThemedText>
             <ThemedText style={styles.muted}>
@@ -969,6 +1302,76 @@ export default function HomeScreen() {
               </>
             ) : null}
           </ThemedView>
+
+            <ThemedView style={[styles.card, styles.energyCatalogCard]}>
+              <ThemedText type="subtitle">Battery Energy Combinations</ThemedText>
+              <ThemedText style={styles.muted}>
+                Runtime energy from each device (power × hours). Required devices first; optional only with required.
+                Available: {availableEnergyWh.toFixed(1)} Wh.
+              </ThemedText>
+
+              {devices.length === 0 ? (
+                <ThemedText style={styles.muted}>Add devices to see energy combinations.</ThemedText>
+              ) : energyCombinationCatalog.noEnergyAvailable ? (
+                <ThemedText style={styles.muted}>
+                  Configure battery capacity and SOC to calculate available energy combinations.
+                </ThemedText>
+              ) : energyCombinationCatalog.tooManyDevices ? (
+                <ThemedText style={styles.muted}>
+                  Too many devices to list all combinations (max {MAX_ENERGY_ENUM_DEVICES}).
+                </ThemedText>
+              ) : (
+                <>
+                  <ThemedText type="defaultSemiBold" style={styles.inverterSectionTitle}>
+                    Required only ({energyCombinationCatalog.essentialOnly.length})
+                  </ThemedText>
+                  {energyCombinationCatalog.essentialOnly.length === 0 ? (
+                    <ThemedText style={styles.muted}>No required-only combination fits available energy.</ThemedText>
+                  ) : (
+                    <EnergyComboList
+                      combos={energyCombinationCatalog.essentialOnly}
+                      variant="valid"
+                      availableEnergyWh={availableEnergyWh}
+                      showAll={showAllEnergyEssentialOnly}
+                      onToggleShowAll={() => setShowAllEnergyEssentialOnly((prev) => !prev)}
+                    />
+                  )}
+
+                  <ThemedText type="defaultSemiBold" style={styles.inverterSectionTitle}>
+                    Required + Optional ({energyCombinationCatalog.essentialWithOptional.length})
+                  </ThemedText>
+                  {energyCombinationCatalog.essentialWithOptional.length === 0 ? (
+                    <ThemedText style={styles.muted}>
+                      No required + optional combination fits available energy.
+                    </ThemedText>
+                  ) : (
+                    <EnergyComboList
+                      combos={energyCombinationCatalog.essentialWithOptional}
+                      variant="valid"
+                      availableEnergyWh={availableEnergyWh}
+                      showAll={showAllEnergyEssentialOptional}
+                      onToggleShowAll={() => setShowAllEnergyEssentialOptional((prev) => !prev)}
+                    />
+                  )}
+
+                  <ThemedText type="defaultSemiBold" style={styles.inverterSectionTitle}>
+                    Cannot run together ({energyCombinationCatalog.invalid.length})
+                  </ThemedText>
+                  {energyCombinationCatalog.invalid.length === 0 ? (
+                    <ThemedText style={styles.muted}>Every listed combination fits energy rules.</ThemedText>
+                  ) : (
+                    <EnergyComboList
+                      combos={energyCombinationCatalog.invalid}
+                      variant="invalid"
+                      availableEnergyWh={availableEnergyWh}
+                      showAll={showAllEnergyInvalid}
+                      onToggleShowAll={() => setShowAllEnergyInvalid((prev) => !prev)}
+                    />
+                  )}
+                </>
+              )}
+            </ThemedView>
+          </ThemedView>
         </ThemedView>
 
         <ThemedView style={[styles.card, styles.infoNeutral]}>
@@ -1026,6 +1429,11 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
   },
   batteryColumn: {
+    flex: 1,
+    minWidth: 280,
+    gap: 12,
+  },
+  optimizationColumn: {
     flex: 1,
     minWidth: 280,
     gap: 12,
@@ -1150,6 +1558,42 @@ const styles = StyleSheet.create({
   inverterCatalogCard: {
     borderColor: '#d4c4a8',
     backgroundColor: '#fffaf0',
+  },
+  energyCatalogCard: {
+    borderColor: '#9ec5f8',
+    backgroundColor: '#f0f6ff',
+  },
+  energyComboFrameValid: {
+    borderWidth: 2,
+    borderColor: '#3d7abf',
+    borderRadius: 10,
+    backgroundColor: '#ffffff',
+    padding: 12,
+    gap: 6,
+    shadowColor: '#000',
+    shadowOpacity: 0.06,
+    shadowRadius: 4,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 2,
+  },
+  energyComboFrameInvalid: {
+    borderWidth: 2,
+    borderColor: '#c45c4a',
+    borderRadius: 10,
+    backgroundColor: '#ffffff',
+    padding: 12,
+    gap: 6,
+    shadowColor: '#000',
+    shadowOpacity: 0.06,
+    shadowRadius: 4,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 2,
+  },
+  energyValidText: {
+    color: '#1b4b7a',
+  },
+  energyInvalidText: {
+    color: '#8b3a2a',
   },
   inverterSectionTitle: {
     marginTop: 12,
