@@ -1,21 +1,27 @@
 import { useRouter } from 'expo-router';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput } from 'react-native';
+import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, TextInput } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { RunnableComboList } from '@/components/combination-catalog-ui';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
-
-type ApiDevice = {
-  id: string;
-  name: string;
-  power: number;
-  duration: number;
-  priority: number;
-  essential: boolean;
-  start_time: string;
-  end_time: string;
-};
+import {
+  CITIES_URL,
+  DEFAULT_INVERTER_MAX_POWER_W,
+  DEVICES_URL,
+  ENERGY_LATEST_URL,
+  OPTIMIZE_URL,
+  SOLAR_SYSTEM_URL,
+} from '@/lib/api-config';
+import type { ApiDevice } from '@/lib/device-types';
+import {
+  buildDevicesCatalogSignature,
+  buildRunnableCombinationCatalog,
+  deviceEnergyWh,
+  energyForDuration,
+  MAX_INVERTER_ENUM_DEVICES,
+} from '@/lib/optimization-catalog';
 
 type EnergyDataItem = {
   voltage?: number;
@@ -61,262 +67,6 @@ type DurationReductionSuggestion = {
   suggestedEnergyWh: number;
   summary: string;
 };
-
-type InverterPowerSet = {
-  id: string;
-  devices: ApiDevice[];
-  totalPowerW: number;
-  essentialCount: number;
-  optionalCount: number;
-  summary: string;
-};
-
-type InverterPowerCatalog = {
-  essentialOnly: InverterPowerSet[];
-  optionalOnly: InverterPowerSet[];
-  essentialWithOptional: InverterPowerSet[];
-  invalid: InverterPowerSet[];
-  tooManyDevices: boolean;
-};
-
-type EnergyCombinationSet = {
-  id: string;
-  devices: ApiDevice[];
-  totalEnergyWh: number;
-  essentialCount: number;
-  optionalCount: number;
-  kind: 'essential_only' | 'essential_with_optional' | 'invalid';
-  summary: string;
-};
-
-type EnergyCombinationCatalog = {
-  essentialOnly: EnergyCombinationSet[];
-  essentialWithOptional: EnergyCombinationSet[];
-  invalid: EnergyCombinationSet[];
-  tooManyDevices: boolean;
-  noEnergyAvailable: boolean;
-};
-
-type RunnableCombination = {
-  id: string;
-  devices: ApiDevice[];
-  totalPowerW: number;
-  totalEnergyWh: number;
-  essentialCount: number;
-  optionalCount: number;
-  category: 'essential_only' | 'optional_only' | 'essential_with_optional';
-  summary: string;
-};
-
-type RunnableCombinationCatalog = {
-  essentialOnly: RunnableCombination[];
-  optionalOnly: RunnableCombination[];
-  essentialWithOptional: RunnableCombination[];
-  tooManyDevices: boolean;
-  noEnergyAvailable: boolean;
-};
-
-const DEFAULT_INVERTER_MAX_POWER_W = 2000;
-const MAX_INVERTER_ENUM_DEVICES = 14;
-const MAX_ENERGY_ENUM_DEVICES = 14;
-const INITIAL_INVERTER_COMBOS_SHOWN = 4;
-const INITIAL_ENERGY_COMBOS_SHOWN = 4;
-const INITIAL_RUNNABLE_COMBOS_SHOWN = 4;
-
-type InverterComboListProps = {
-  combos: InverterPowerSet[];
-  variant: 'valid' | 'invalid';
-  inverterMaxPowerW: number;
-  showAll: boolean;
-  onToggleShowAll: () => void;
-};
-
-type EnergyComboListProps = {
-  combos: EnergyCombinationSet[];
-  variant: 'valid' | 'invalid';
-  availableEnergyWh: number;
-  showAll: boolean;
-  onToggleShowAll: () => void;
-};
-
-function EnergyComboList({ combos, variant, availableEnergyWh, showAll, onToggleShowAll }: EnergyComboListProps) {
-  if (combos.length === 0) {
-    return null;
-  }
-
-  const visibleCombos = showAll ? combos : combos.slice(0, INITIAL_ENERGY_COMBOS_SHOWN);
-  const hiddenCount = Math.max(0, combos.length - INITIAL_ENERGY_COMBOS_SHOWN);
-  const frameStyle = variant === 'valid' ? styles.energyComboFrameValid : styles.energyComboFrameInvalid;
-  const titleStyle = variant === 'valid' ? styles.energyValidText : styles.energyInvalidText;
-
-  return (
-    <ThemedView style={styles.inverterComboList}>
-      {visibleCombos.map((combo) => (
-        <ThemedView key={`energy-${variant}-${combo.id}`} style={frameStyle}>
-          <ThemedText type="defaultSemiBold" style={titleStyle}>
-            {combo.summary}
-          </ThemedText>
-          <ThemedText style={styles.muted}>
-            {combo.essentialCount} required · {combo.optionalCount} optional · {combo.devices.length} device
-            {combo.devices.length === 1 ? '' : 's'}
-            {variant === 'valid'
-              ? ` · headroom ${(availableEnergyWh - combo.totalEnergyWh).toFixed(0)} Wh`
-              : ` · exceeds by ${(combo.totalEnergyWh - availableEnergyWh).toFixed(0)} Wh`}
-          </ThemedText>
-        </ThemedView>
-      ))}
-
-      {!showAll && hiddenCount > 0 ? (
-        <Pressable
-          style={({ pressed }) => [styles.showAllButton, pressed && styles.buttonPressed]}
-          onPress={onToggleShowAll}
-        >
-          <Text style={styles.showAllButtonText}>Show all ({hiddenCount} more)</Text>
-        </Pressable>
-      ) : null}
-
-      {showAll && combos.length > INITIAL_ENERGY_COMBOS_SHOWN ? (
-        <Pressable
-          style={({ pressed }) => [styles.showAllButton, pressed && styles.buttonPressed]}
-          onPress={onToggleShowAll}
-        >
-          <Text style={styles.showAllButtonText}>Show less</Text>
-        </Pressable>
-      ) : null}
-    </ThemedView>
-  );
-}
-
-type RunnableComboListProps = {
-  combos: RunnableCombination[];
-  selectedId: string | null;
-  inverterMaxPowerW: number;
-  availableEnergyWh: number;
-  showAll: boolean;
-  onToggleShowAll: () => void;
-  onSelect: (comboId: string) => void;
-};
-
-function RunnableComboList({
-  combos,
-  selectedId,
-  inverterMaxPowerW,
-  availableEnergyWh,
-  showAll,
-  onToggleShowAll,
-  onSelect,
-}: RunnableComboListProps) {
-  if (combos.length === 0) {
-    return null;
-  }
-
-  const visibleCombos = showAll ? combos : combos.slice(0, INITIAL_RUNNABLE_COMBOS_SHOWN);
-  const hiddenCount = Math.max(0, combos.length - INITIAL_RUNNABLE_COMBOS_SHOWN);
-
-  return (
-    <ThemedView style={styles.inverterComboList}>
-      {visibleCombos.map((combo) => {
-        const isSelected = selectedId === combo.id;
-        return (
-          <Pressable
-            key={`runnable-${combo.id}`}
-            style={({ pressed }) => [
-              styles.runnableComboFrame,
-              isSelected && styles.runnableComboFrameSelected,
-              pressed && styles.buttonPressed,
-            ]}
-            onPress={() => onSelect(combo.id)}
-          >
-            <ThemedText type="defaultSemiBold" style={styles.runnableComboText}>
-              {isSelected ? '✓ ' : ''}
-              {combo.summary}
-            </ThemedText>
-            <ThemedText style={styles.muted}>
-              {combo.essentialCount} required · {combo.optionalCount} optional · headroom{' '}
-              {(inverterMaxPowerW - combo.totalPowerW).toFixed(0)} W /{' '}
-              {(availableEnergyWh - combo.totalEnergyWh).toFixed(0)} Wh
-            </ThemedText>
-            <Text style={styles.selectComboButtonText}>{isSelected ? 'Selected' : 'Select to run'}</Text>
-          </Pressable>
-        );
-      })}
-
-      {!showAll && hiddenCount > 0 ? (
-        <Pressable
-          style={({ pressed }) => [styles.showAllButton, pressed && styles.buttonPressed]}
-          onPress={onToggleShowAll}
-        >
-          <Text style={styles.showAllButtonText}>Show all ({hiddenCount} more)</Text>
-        </Pressable>
-      ) : null}
-
-      {showAll && combos.length > INITIAL_RUNNABLE_COMBOS_SHOWN ? (
-        <Pressable
-          style={({ pressed }) => [styles.showAllButton, pressed && styles.buttonPressed]}
-          onPress={onToggleShowAll}
-        >
-          <Text style={styles.showAllButtonText}>Show less</Text>
-        </Pressable>
-      ) : null}
-    </ThemedView>
-  );
-}
-
-function InverterComboList({ combos, variant, inverterMaxPowerW, showAll, onToggleShowAll }: InverterComboListProps) {
-  if (combos.length === 0) {
-    return null;
-  }
-
-  const visibleCombos = showAll ? combos : combos.slice(0, INITIAL_INVERTER_COMBOS_SHOWN);
-  const hiddenCount = Math.max(0, combos.length - INITIAL_INVERTER_COMBOS_SHOWN);
-  const frameStyle = variant === 'valid' ? styles.inverterComboFrameValid : styles.inverterComboFrameInvalid;
-  const titleStyle = variant === 'valid' ? styles.inverterValidText : styles.inverterInvalidText;
-
-  return (
-    <ThemedView style={styles.inverterComboList}>
-      {visibleCombos.map((combo, index) => (
-        <ThemedView key={`${variant}-${combo.id}`} style={frameStyle}>
-          <ThemedText type="defaultSemiBold" style={titleStyle}>
-            {combo.summary}
-          </ThemedText>
-          <ThemedText style={styles.muted}>
-            {combo.essentialCount} required · {combo.optionalCount} optional · {combo.devices.length} device
-            {combo.devices.length === 1 ? '' : 's'}
-            {variant === 'valid'
-              ? ` · headroom ${(inverterMaxPowerW - combo.totalPowerW).toFixed(0)} W`
-              : ` · exceeds by ${(combo.totalPowerW - inverterMaxPowerW).toFixed(0)} W`}
-          </ThemedText>
-        </ThemedView>
-      ))}
-
-      {!showAll && hiddenCount > 0 ? (
-        <Pressable
-          style={({ pressed }) => [styles.showAllButton, pressed && styles.buttonPressed]}
-          onPress={onToggleShowAll}
-        >
-          <Text style={styles.showAllButtonText}>Show all ({hiddenCount} more)</Text>
-        </Pressable>
-      ) : null}
-
-      {showAll && combos.length > INITIAL_INVERTER_COMBOS_SHOWN ? (
-        <Pressable
-          style={({ pressed }) => [styles.showAllButton, pressed && styles.buttonPressed]}
-          onPress={onToggleShowAll}
-        >
-          <Text style={styles.showAllButtonText}>Show less</Text>
-        </Pressable>
-      ) : null}
-    </ThemedView>
-  );
-}
-
-function deviceEnergyWh(device: ApiDevice): number {
-  return device.power * (device.duration / 60);
-}
-
-function energyForDuration(device: ApiDevice, durationMinutes: number): number {
-  return device.power * (durationMinutes / 60);
-}
 
 function maxRunnableDurationMinutes(device: ApiDevice, availableEnergyWh: number): number {
   if (device.power <= 0 || availableEnergyWh <= 0) return 0;
@@ -381,381 +131,6 @@ function combinationFits(devices: ApiDevice[], availableEnergyWh: number, invert
   const totalPower = devices.reduce((sum, device) => sum + device.power, 0);
   const totalEnergy = devices.reduce((sum, device) => sum + deviceEnergyWh(device), 0);
   return totalPower <= inverterMaxPowerW && totalEnergy <= availableEnergyWh;
-}
-
-function formatDeviceList(devices: ApiDevice[]): string {
-  return devices.map((device) => device.name).join(' + ');
-}
-
-function combinationTotalPowerW(devices: ApiDevice[]): number {
-  return devices.reduce((sum, device) => sum + device.power, 0);
-}
-
-function buildDevicesCatalogSignature(devices: ApiDevice[]): string {
-  return devices
-    .map((device) => `${device.id}:${device.power}:${device.duration}:${device.essential}`)
-    .sort()
-    .join('|');
-}
-
-function formatInverterCombinationSummary(devices: ApiDevice[]): string {
-  const essentialParts = devices
-    .filter((device) => device.essential)
-    .map((device) => `${device.name} (${device.power} W)`);
-  const optionalParts = devices
-    .filter((device) => !device.essential)
-    .map((device) => `${device.name} (${device.power} W)`);
-
-  const segments: string[] = [];
-  if (essentialParts.length > 0) {
-    segments.push(`Required: ${essentialParts.join(', ')}`);
-  }
-  if (optionalParts.length > 0) {
-    segments.push(`Optional: ${optionalParts.join(', ')}`);
-  }
-
-  const totalPowerW = combinationTotalPowerW(devices);
-  return `${segments.join(' · ')} — ${totalPowerW.toFixed(0)} W`;
-}
-
-function buildInverterPowerCatalog(devices: ApiDevice[], inverterMaxPowerW: number): InverterPowerCatalog {
-  if (devices.length === 0) {
-    return {
-      essentialOnly: [],
-      optionalOnly: [],
-      essentialWithOptional: [],
-      invalid: [],
-      tooManyDevices: false,
-    };
-  }
-  if (devices.length > MAX_INVERTER_ENUM_DEVICES) {
-    return {
-      essentialOnly: [],
-      optionalOnly: [],
-      essentialWithOptional: [],
-      invalid: [],
-      tooManyDevices: true,
-    };
-  }
-
-  const essentialOnly: InverterPowerSet[] = [];
-  const optionalOnly: InverterPowerSet[] = [];
-  const essentialWithOptional: InverterPowerSet[] = [];
-  const invalid: InverterPowerSet[] = [];
-  const subsetCount = 1 << devices.length;
-
-  for (let mask = 1; mask < subsetCount; mask += 1) {
-    const subset: ApiDevice[] = [];
-    for (let index = 0; index < devices.length; index += 1) {
-      if (mask & (1 << index)) {
-        subset.push(devices[index]);
-      }
-    }
-    const totalPowerW = combinationTotalPowerW(subset);
-    const essentialCount = subset.filter((device) => device.essential).length;
-    const optionalCount = subset.length - essentialCount;
-    const id = subset
-      .map((device) => device.id)
-      .sort()
-      .join('+');
-    const entry: InverterPowerSet = {
-      id,
-      devices: subset,
-      totalPowerW,
-      essentialCount,
-      optionalCount,
-      summary: formatInverterCombinationSummary(subset),
-    };
-
-    if (totalPowerW > inverterMaxPowerW) {
-      invalid.push(entry);
-      continue;
-    }
-
-    if (optionalCount === 0) {
-      essentialOnly.push(entry);
-    } else if (essentialCount === 0) {
-      optionalOnly.push(entry);
-    } else {
-      essentialWithOptional.push(entry);
-    }
-  }
-
-  const sortBySizeThenPower = (a: InverterPowerSet, b: InverterPowerSet) => {
-    if (a.devices.length !== b.devices.length) {
-      return a.devices.length - b.devices.length;
-    }
-    return a.totalPowerW - b.totalPowerW;
-  };
-
-  essentialOnly.sort(sortBySizeThenPower);
-  optionalOnly.sort(sortBySizeThenPower);
-  essentialWithOptional.sort(sortBySizeThenPower);
-  invalid.sort((a, b) => b.totalPowerW - a.totalPowerW);
-
-  return {
-    essentialOnly,
-    optionalOnly,
-    essentialWithOptional,
-    invalid,
-    tooManyDevices: false,
-  };
-}
-
-function combinationTotalEnergyWh(devices: ApiDevice[]): number {
-  return devices.reduce((sum, device) => sum + deviceEnergyWh(device), 0);
-}
-
-function passesEssentialOptionalRule(devices: ApiDevice[]): boolean {
-  const hasOptional = devices.some((device) => !device.essential);
-  if (!hasOptional) {
-    return true;
-  }
-  return devices.some((device) => device.essential);
-}
-
-function formatEnergyCombinationSummary(devices: ApiDevice[]): string {
-  const essentialParts = devices
-    .filter((device) => device.essential)
-    .map((device) => `${device.name} (${device.duration} min, ${deviceEnergyWh(device).toFixed(0)} Wh)`);
-  const optionalParts = devices
-    .filter((device) => !device.essential)
-    .map((device) => `${device.name} (${device.duration} min, ${deviceEnergyWh(device).toFixed(0)} Wh)`);
-
-  const segments: string[] = [];
-  if (essentialParts.length > 0) {
-    segments.push(`Required: ${essentialParts.join(', ')}`);
-  }
-  if (optionalParts.length > 0) {
-    segments.push(`Optional: ${optionalParts.join(', ')}`);
-  }
-
-  const totalEnergyWh = combinationTotalEnergyWh(devices);
-  return `${segments.join(' · ')} — ${totalEnergyWh.toFixed(0)} Wh`;
-}
-
-function buildEnergyCombinationCatalog(
-  devices: ApiDevice[],
-  availableEnergyWh: number,
-): EnergyCombinationCatalog {
-  if (devices.length === 0) {
-    return {
-      essentialOnly: [],
-      essentialWithOptional: [],
-      invalid: [],
-      tooManyDevices: false,
-      noEnergyAvailable: availableEnergyWh <= 0,
-    };
-  }
-  if (availableEnergyWh <= 0) {
-    return {
-      essentialOnly: [],
-      essentialWithOptional: [],
-      invalid: [],
-      tooManyDevices: false,
-      noEnergyAvailable: true,
-    };
-  }
-  if (devices.length > MAX_ENERGY_ENUM_DEVICES) {
-    return {
-      essentialOnly: [],
-      essentialWithOptional: [],
-      invalid: [],
-      tooManyDevices: true,
-      noEnergyAvailable: false,
-    };
-  }
-
-  const essentialOnly: EnergyCombinationSet[] = [];
-  const essentialWithOptional: EnergyCombinationSet[] = [];
-  const invalid: EnergyCombinationSet[] = [];
-  const subsetCount = 1 << devices.length;
-
-  for (let mask = 1; mask < subsetCount; mask += 1) {
-    const subset: ApiDevice[] = [];
-    for (let index = 0; index < devices.length; index += 1) {
-      if (mask & (1 << index)) {
-        subset.push(devices[index]);
-      }
-    }
-
-    const totalEnergyWh = combinationTotalEnergyWh(subset);
-    const essentialCount = subset.filter((device) => device.essential).length;
-    const optionalCount = subset.length - essentialCount;
-    const id = subset
-      .map((device) => device.id)
-      .sort()
-      .join('+');
-    const fitsEnergy = totalEnergyWh <= availableEnergyWh;
-    const fitsEssentialRule = passesEssentialOptionalRule(subset);
-
-    if (!fitsEnergy || !fitsEssentialRule) {
-      const reasons: string[] = [];
-      if (!fitsEnergy) {
-        reasons.push(`exceeds available energy by ${(totalEnergyWh - availableEnergyWh).toFixed(0)} Wh`);
-      }
-      if (!fitsEssentialRule) {
-        reasons.push('optional devices must run with at least one required device');
-      }
-      invalid.push({
-        id,
-        devices: subset,
-        totalEnergyWh,
-        essentialCount,
-        optionalCount,
-        kind: 'invalid',
-        summary: `${formatEnergyCombinationSummary(subset)} (${reasons.join('; ')})`,
-      });
-      continue;
-    }
-
-    const entry: EnergyCombinationSet = {
-      id,
-      devices: subset,
-      totalEnergyWh,
-      essentialCount,
-      optionalCount,
-      kind: optionalCount === 0 ? 'essential_only' : 'essential_with_optional',
-      summary: formatEnergyCombinationSummary(subset),
-    };
-
-    if (optionalCount === 0) {
-      essentialOnly.push(entry);
-    } else {
-      essentialWithOptional.push(entry);
-    }
-  }
-
-  const sortEnergySets = (a: EnergyCombinationSet, b: EnergyCombinationSet) => {
-    if (a.devices.length !== b.devices.length) {
-      return a.devices.length - b.devices.length;
-    }
-    return a.totalEnergyWh - b.totalEnergyWh;
-  };
-
-  essentialOnly.sort(sortEnergySets);
-  essentialWithOptional.sort(sortEnergySets);
-  invalid.sort((a, b) => b.totalEnergyWh - a.totalEnergyWh);
-
-  return {
-    essentialOnly,
-    essentialWithOptional,
-    invalid,
-    tooManyDevices: false,
-    noEnergyAvailable: false,
-  };
-}
-
-function formatRunnableCombinationSummary(devices: ApiDevice[]): string {
-  const powerSummary = formatInverterCombinationSummary(devices);
-  const totalEnergyWh = combinationTotalEnergyWh(devices);
-  return `${powerSummary} · ${totalEnergyWh.toFixed(0)} Wh energy`;
-}
-
-function buildRunnableCombinationCatalog(
-  devices: ApiDevice[],
-  inverterMaxPowerW: number,
-  availableEnergyWh: number,
-): RunnableCombinationCatalog {
-  if (devices.length === 0) {
-    return {
-      essentialOnly: [],
-      optionalOnly: [],
-      essentialWithOptional: [],
-      tooManyDevices: false,
-      noEnergyAvailable: availableEnergyWh <= 0,
-    };
-  }
-  if (availableEnergyWh <= 0) {
-    return {
-      essentialOnly: [],
-      optionalOnly: [],
-      essentialWithOptional: [],
-      tooManyDevices: false,
-      noEnergyAvailable: true,
-    };
-  }
-  if (devices.length > MAX_INVERTER_ENUM_DEVICES) {
-    return {
-      essentialOnly: [],
-      optionalOnly: [],
-      essentialWithOptional: [],
-      tooManyDevices: true,
-      noEnergyAvailable: false,
-    };
-  }
-
-  const essentialOnly: RunnableCombination[] = [];
-  const optionalOnly: RunnableCombination[] = [];
-  const essentialWithOptional: RunnableCombination[] = [];
-  const subsetCount = 1 << devices.length;
-
-  for (let mask = 1; mask < subsetCount; mask += 1) {
-    const subset: ApiDevice[] = [];
-    for (let index = 0; index < devices.length; index += 1) {
-      if (mask & (1 << index)) {
-        subset.push(devices[index]);
-      }
-    }
-
-    const totalPowerW = combinationTotalPowerW(subset);
-    const totalEnergyWh = combinationTotalEnergyWh(subset);
-    const essentialCount = subset.filter((device) => device.essential).length;
-    const optionalCount = subset.length - essentialCount;
-    const id = subset
-      .map((device) => device.id)
-      .sort()
-      .join('+');
-
-    const fitsInverter = totalPowerW <= inverterMaxPowerW;
-    const fitsEnergy = totalEnergyWh <= availableEnergyWh && passesEssentialOptionalRule(subset);
-    if (!fitsInverter || !fitsEnergy) {
-      continue;
-    }
-
-    const entry: RunnableCombination = {
-      id,
-      devices: subset,
-      totalPowerW,
-      totalEnergyWh,
-      essentialCount,
-      optionalCount,
-      category:
-        optionalCount === 0
-          ? 'essential_only'
-          : essentialCount === 0
-            ? 'optional_only'
-            : 'essential_with_optional',
-      summary: formatRunnableCombinationSummary(subset),
-    };
-
-    if (optionalCount === 0) {
-      essentialOnly.push(entry);
-    } else if (essentialCount === 0) {
-      optionalOnly.push(entry);
-    } else {
-      essentialWithOptional.push(entry);
-    }
-  }
-
-  const sortRunnable = (a: RunnableCombination, b: RunnableCombination) => {
-    if (a.devices.length !== b.devices.length) {
-      return a.devices.length - b.devices.length;
-    }
-    return a.totalEnergyWh - b.totalEnergyWh;
-  };
-
-  essentialOnly.sort(sortRunnable);
-  optionalOnly.sort(sortRunnable);
-  essentialWithOptional.sort(sortRunnable);
-
-  return {
-    essentialOnly,
-    optionalOnly,
-    essentialWithOptional,
-    tooManyDevices: false,
-    noEnergyAvailable: false,
-  };
 }
 
 function expandBlockedDevicesIntoCombination(
@@ -898,13 +273,6 @@ function buildAlternativeCombinations(
 
   return suggestions.slice(0, 12);
 }
-
-const DEVICES_URL = Platform.OS === 'android' ? 'http://10.0.2.2:8000/devices' : 'http://127.0.0.1:8000/devices';
-const ENERGY_LATEST_URL = Platform.OS === 'android' ? 'http://10.0.2.2:8000/energy-data/latest' : 'http://127.0.0.1:8000/energy-data/latest';
-const CITIES_URL = Platform.OS === 'android' ? 'http://10.0.2.2:8000/cities' : 'http://127.0.0.1:8000/cities';
-const OPTIMIZE_URL = Platform.OS === 'android' ? 'http://10.0.2.2:8000/optimize' : 'http://127.0.0.1:8000/optimize';
-const SOLAR_SYSTEM_URL =
-  Platform.OS === 'android' ? 'http://10.0.2.2:8000/solar-system' : 'http://127.0.0.1:8000/solar-system';
 
 type SolarSystemProfileResponse = {
   battery_capacity_wh: number;
@@ -1073,13 +441,6 @@ export default function HomeScreen() {
   const [inverterMaxPowerWValue, setInverterMaxPowerWValue] = useState(DEFAULT_INVERTER_MAX_POWER_W);
   const inverterMaxPowerWRef = useRef(DEFAULT_INVERTER_MAX_POWER_W);
   const [weatherLoading, setWeatherLoading] = useState(false);
-  const [showAllInverterEssentialOnly, setShowAllInverterEssentialOnly] = useState(false);
-  const [showAllInverterOptionalOnly, setShowAllInverterOptionalOnly] = useState(false);
-  const [showAllInverterEssentialOptional, setShowAllInverterEssentialOptional] = useState(false);
-  const [showAllInvalidCombos, setShowAllInvalidCombos] = useState(false);
-  const [showAllEnergyEssentialOnly, setShowAllEnergyEssentialOnly] = useState(false);
-  const [showAllEnergyEssentialOptional, setShowAllEnergyEssentialOptional] = useState(false);
-  const [showAllEnergyInvalid, setShowAllEnergyInvalid] = useState(false);
   const [selectedRunnableCombinationId, setSelectedRunnableCombinationId] = useState<string | null>(null);
   const [showAllRunnableEssentialOnly, setShowAllRunnableEssentialOnly] = useState(false);
   const [showAllRunnableOptionalOnly, setShowAllRunnableOptionalOnly] = useState(false);
@@ -1099,18 +460,10 @@ export default function HomeScreen() {
     () => optimizeDevices(devices, availableEnergyWh, inverterMaxPowerWValue),
     [devices, availableEnergyWh, inverterMaxPowerWValue],
   );
-  const inverterPowerCatalog = useMemo(
-    () => buildInverterPowerCatalog(devices, inverterMaxPowerWValue),
-    [devices, inverterMaxPowerWValue],
-  );
   const devicesCatalogSignature = useMemo(() => buildDevicesCatalogSignature(devices), [devices]);
   const energyCatalogSignature = useMemo(
     () => `${devicesCatalogSignature}|${availableEnergyWh.toFixed(1)}`,
     [devicesCatalogSignature, availableEnergyWh],
-  );
-  const energyCombinationCatalog = useMemo(
-    () => buildEnergyCombinationCatalog(devices, availableEnergyWh),
-    [devices, availableEnergyWh],
   );
   const runnableCombinationCatalog = useMemo(
     () => buildRunnableCombinationCatalog(devices, inverterMaxPowerWValue, availableEnergyWh),
@@ -1132,19 +485,6 @@ export default function HomeScreen() {
     () => allRunnableCombinations.find((combo) => combo.id === selectedRunnableCombinationId) ?? null,
     [allRunnableCombinations, selectedRunnableCombinationId],
   );
-
-  useEffect(() => {
-    setShowAllInverterEssentialOnly(false);
-    setShowAllInverterOptionalOnly(false);
-    setShowAllInverterEssentialOptional(false);
-    setShowAllInvalidCombos(false);
-  }, [devicesCatalogSignature, inverterMaxPowerWValue]);
-
-  useEffect(() => {
-    setShowAllEnergyEssentialOnly(false);
-    setShowAllEnergyEssentialOptional(false);
-    setShowAllEnergyInvalid(false);
-  }, [energyCatalogSignature]);
 
   useEffect(() => {
     setShowAllRunnableEssentialOnly(false);
@@ -1364,7 +704,7 @@ export default function HomeScreen() {
 
         <ThemedView style={styles.row}>
           <ThemedView style={styles.batteryColumn}>
-            <ThemedView style={[styles.card, styles.infoBlue]}>
+            <ThemedView style={[styles.card, styles.infoBlue, styles.columnCard]}>
               <ThemedText type="subtitle">Battery</ThemedText>
               {loading ? (
                 <ActivityIndicator size="small" color="#0a7ea4" />
@@ -1387,166 +727,23 @@ export default function HomeScreen() {
               ) : null}
             </ThemedView>
 
-            <ThemedView style={[styles.card, styles.inverterCatalogCard]}>
-              <ThemedText type="subtitle">Inverter Power Combinations</ThemedText>
-              <ThemedText style={styles.muted}>
-                Simultaneous load only (max {inverterMaxPowerWValue.toFixed(0)} W). Independent of battery energy.
-                Updates when devices or inverter limit change.
-              </ThemedText>
+            <Pressable
+              style={({ pressed }) => [styles.card, styles.infoBlue, styles.columnCard, pressed && styles.buttonPressed]}
+              onPress={() => router.push('/constraint-combinations')}>
+              <ThemedText type="subtitle">Inverter & Battery Combinations</ThemedText>
+              <ThemedText style={styles.muted}>Inverter power and battery energy catalogs</ThemedText>
+            </Pressable>
 
-              {devices.length === 0 ? (
-                <ThemedText style={styles.muted}>Add devices to see which sets can run together.</ThemedText>
-              ) : inverterPowerCatalog.tooManyDevices ? (
-                <ThemedText style={styles.muted}>
-                  Too many devices to list all combinations (max {MAX_INVERTER_ENUM_DEVICES}).
-                </ThemedText>
-              ) : (
-                <>
-                  <ThemedText type="defaultSemiBold" style={styles.inverterSectionTitle}>
-                    Required only ({inverterPowerCatalog.essentialOnly.length})
-                  </ThemedText>
-                  {inverterPowerCatalog.essentialOnly.length === 0 ? (
-                    <ThemedText style={styles.muted}>No required-only combination fits the inverter limit.</ThemedText>
-                  ) : (
-                    <InverterComboList
-                      combos={inverterPowerCatalog.essentialOnly}
-                      variant="valid"
-                      inverterMaxPowerW={inverterMaxPowerWValue}
-                      showAll={showAllInverterEssentialOnly}
-                      onToggleShowAll={() => setShowAllInverterEssentialOnly((prev) => !prev)}
-                    />
-                  )}
-
-                  <ThemedText type="defaultSemiBold" style={styles.inverterSectionTitle}>
-                    Optional only ({inverterPowerCatalog.optionalOnly.length})
-                  </ThemedText>
-                  {inverterPowerCatalog.optionalOnly.length === 0 ? (
-                    <ThemedText style={styles.muted}>No optional-only combination fits the inverter limit.</ThemedText>
-                  ) : (
-                    <InverterComboList
-                      combos={inverterPowerCatalog.optionalOnly}
-                      variant="valid"
-                      inverterMaxPowerW={inverterMaxPowerWValue}
-                      showAll={showAllInverterOptionalOnly}
-                      onToggleShowAll={() => setShowAllInverterOptionalOnly((prev) => !prev)}
-                    />
-                  )}
-
-                  <ThemedText type="defaultSemiBold" style={styles.inverterSectionTitle}>
-                    Required + Optional ({inverterPowerCatalog.essentialWithOptional.length})
-                  </ThemedText>
-                  {inverterPowerCatalog.essentialWithOptional.length === 0 ? (
-                    <ThemedText style={styles.muted}>
-                      No required + optional combination fits the inverter limit.
-                    </ThemedText>
-                  ) : (
-                    <InverterComboList
-                      combos={inverterPowerCatalog.essentialWithOptional}
-                      variant="valid"
-                      inverterMaxPowerW={inverterMaxPowerWValue}
-                      showAll={showAllInverterEssentialOptional}
-                      onToggleShowAll={() => setShowAllInverterEssentialOptional((prev) => !prev)}
-                    />
-                  )}
-
-                  <ThemedText type="defaultSemiBold" style={styles.inverterSectionTitle}>
-                    Cannot run together ({inverterPowerCatalog.invalid.length})
-                  </ThemedText>
-                  {inverterPowerCatalog.invalid.length === 0 ? (
-                    <ThemedText style={styles.muted}>Every listed combination fits the inverter limit.</ThemedText>
-                  ) : (
-                    <InverterComboList
-                      combos={inverterPowerCatalog.invalid}
-                      variant="invalid"
-                      inverterMaxPowerW={inverterMaxPowerWValue}
-                      showAll={showAllInvalidCombos}
-                      onToggleShowAll={() => setShowAllInvalidCombos((prev) => !prev)}
-                    />
-                  )}
-                </>
-              )}
-            </ThemedView>
+            <Pressable
+              style={({ pressed }) => [styles.card, styles.infoBlue, styles.columnCard, pressed && styles.buttonPressed]}
+              onPress={() => router.push('/devices-overview')}>
+              <ThemedText type="subtitle">Devices Overview</ThemedText>
+              <ThemedText style={styles.muted}>Power, schedule, and energy per device</ThemedText>
+            </Pressable>
           </ThemedView>
 
           <ThemedView style={styles.optimizationColumn}>
-            <ThemedView style={[styles.card, styles.runnableCatalogCard]}>
-              <ThemedText type="subtitle">Feasible Combinations (Inverter & Energy)</ThemedText>
-              <ThemedText style={styles.muted}>
-                Intersection of combinations that satisfy inverter power, battery energy, and required/optional rules.
-                Tap a combination to run it.
-              </ThemedText>
-
-              {devices.length === 0 ? (
-                <ThemedText style={styles.muted}>Add devices to see feasible combinations.</ThemedText>
-              ) : runnableCombinationCatalog.noEnergyAvailable ? (
-                <ThemedText style={styles.muted}>
-                  Configure battery capacity and SOC to calculate feasible combinations.
-                </ThemedText>
-              ) : runnableCombinationCatalog.tooManyDevices ? (
-                <ThemedText style={styles.muted}>
-                  Too many devices to list all combinations (max {MAX_INVERTER_ENUM_DEVICES}).
-                </ThemedText>
-              ) : allRunnableCombinations.length === 0 ? (
-                <ThemedText style={styles.muted}>
-                  No combination satisfies both inverter and energy limits at the same time.
-                </ThemedText>
-              ) : (
-                <>
-                  <ThemedText type="defaultSemiBold" style={styles.inverterSectionTitle}>
-                    Required only ({runnableCombinationCatalog.essentialOnly.length})
-                  </ThemedText>
-                  {runnableCombinationCatalog.essentialOnly.length === 0 ? (
-                    <ThemedText style={styles.muted}>No required-only feasible combination.</ThemedText>
-                  ) : (
-                    <RunnableComboList
-                      combos={runnableCombinationCatalog.essentialOnly}
-                      selectedId={selectedRunnableCombinationId}
-                      inverterMaxPowerW={inverterMaxPowerWValue}
-                      availableEnergyWh={availableEnergyWh}
-                      showAll={showAllRunnableEssentialOnly}
-                      onToggleShowAll={() => setShowAllRunnableEssentialOnly((prev) => !prev)}
-                      onSelect={handleSelectRunnableCombination}
-                    />
-                  )}
-
-                  <ThemedText type="defaultSemiBold" style={styles.inverterSectionTitle}>
-                    Optional only ({runnableCombinationCatalog.optionalOnly.length})
-                  </ThemedText>
-                  {runnableCombinationCatalog.optionalOnly.length === 0 ? (
-                    <ThemedText style={styles.muted}>No optional-only feasible combination.</ThemedText>
-                  ) : (
-                    <RunnableComboList
-                      combos={runnableCombinationCatalog.optionalOnly}
-                      selectedId={selectedRunnableCombinationId}
-                      inverterMaxPowerW={inverterMaxPowerWValue}
-                      availableEnergyWh={availableEnergyWh}
-                      showAll={showAllRunnableOptionalOnly}
-                      onToggleShowAll={() => setShowAllRunnableOptionalOnly((prev) => !prev)}
-                      onSelect={handleSelectRunnableCombination}
-                    />
-                  )}
-
-                  <ThemedText type="defaultSemiBold" style={styles.inverterSectionTitle}>
-                    Required + Optional ({runnableCombinationCatalog.essentialWithOptional.length})
-                  </ThemedText>
-                  {runnableCombinationCatalog.essentialWithOptional.length === 0 ? (
-                    <ThemedText style={styles.muted}>No required + optional feasible combination.</ThemedText>
-                  ) : (
-                    <RunnableComboList
-                      combos={runnableCombinationCatalog.essentialWithOptional}
-                      selectedId={selectedRunnableCombinationId}
-                      inverterMaxPowerW={inverterMaxPowerWValue}
-                      availableEnergyWh={availableEnergyWh}
-                      showAll={showAllRunnableEssentialOptional}
-                      onToggleShowAll={() => setShowAllRunnableEssentialOptional((prev) => !prev)}
-                      onSelect={handleSelectRunnableCombination}
-                    />
-                  )}
-                </>
-              )}
-            </ThemedView>
-
-          <ThemedView style={[styles.card, styles.safeGreen]}>
+            <ThemedView style={[styles.card, styles.safeGreen]}>
             <ThemedText type="subtitle">Optimization Results</ThemedText>
 
             {selectedRunnableCombination ? (
@@ -1570,7 +767,7 @@ export default function HomeScreen() {
               </>
             ) : (
               <ThemedText style={styles.muted}>
-                Select a feasible combination above to display your running plan here.
+                Select a feasible combination below to display your running plan here.
               </ThemedText>
             )}
 
@@ -1660,94 +857,83 @@ export default function HomeScreen() {
             ) : null}
           </ThemedView>
 
-            <ThemedView style={[styles.card, styles.energyCatalogCard]}>
-              <ThemedText type="subtitle">Battery Energy Combinations</ThemedText>
+            <ThemedView style={[styles.card, styles.runnableCatalogCard]}>
+              <ThemedText type="subtitle">Feasible Combinations (Inverter & Energy)</ThemedText>
               <ThemedText style={styles.muted}>
-                Runtime energy from each device (power × hours). Required devices first; optional only with required.
-                Available: {availableEnergyWh.toFixed(1)} Wh.
+                Intersection of combinations that satisfy inverter power, battery energy, and required/optional rules.
+                Tap a combination to run it.
               </ThemedText>
 
               {devices.length === 0 ? (
-                <ThemedText style={styles.muted}>Add devices to see energy combinations.</ThemedText>
-              ) : energyCombinationCatalog.noEnergyAvailable ? (
+                <ThemedText style={styles.muted}>Add devices to see feasible combinations.</ThemedText>
+              ) : runnableCombinationCatalog.noEnergyAvailable ? (
                 <ThemedText style={styles.muted}>
-                  Configure battery capacity and SOC to calculate available energy combinations.
+                  Configure battery capacity and SOC to calculate feasible combinations.
                 </ThemedText>
-              ) : energyCombinationCatalog.tooManyDevices ? (
+              ) : runnableCombinationCatalog.tooManyDevices ? (
                 <ThemedText style={styles.muted}>
-                  Too many devices to list all combinations (max {MAX_ENERGY_ENUM_DEVICES}).
+                  Too many devices to list all combinations (max {MAX_INVERTER_ENUM_DEVICES}).
+                </ThemedText>
+              ) : allRunnableCombinations.length === 0 ? (
+                <ThemedText style={styles.muted}>
+                  No combination satisfies both inverter and energy limits at the same time.
                 </ThemedText>
               ) : (
                 <>
                   <ThemedText type="defaultSemiBold" style={styles.inverterSectionTitle}>
-                    Required only ({energyCombinationCatalog.essentialOnly.length})
+                    Required only ({runnableCombinationCatalog.essentialOnly.length})
                   </ThemedText>
-                  {energyCombinationCatalog.essentialOnly.length === 0 ? (
-                    <ThemedText style={styles.muted}>No required-only combination fits available energy.</ThemedText>
+                  {runnableCombinationCatalog.essentialOnly.length === 0 ? (
+                    <ThemedText style={styles.muted}>No required-only feasible combination.</ThemedText>
                   ) : (
-                    <EnergyComboList
-                      combos={energyCombinationCatalog.essentialOnly}
-                      variant="valid"
+                    <RunnableComboList
+                      combos={runnableCombinationCatalog.essentialOnly}
+                      selectedId={selectedRunnableCombinationId}
+                      inverterMaxPowerW={inverterMaxPowerWValue}
                       availableEnergyWh={availableEnergyWh}
-                      showAll={showAllEnergyEssentialOnly}
-                      onToggleShowAll={() => setShowAllEnergyEssentialOnly((prev) => !prev)}
+                      showAll={showAllRunnableEssentialOnly}
+                      onToggleShowAll={() => setShowAllRunnableEssentialOnly((prev) => !prev)}
+                      onSelect={handleSelectRunnableCombination}
                     />
                   )}
 
                   <ThemedText type="defaultSemiBold" style={styles.inverterSectionTitle}>
-                    Required + Optional ({energyCombinationCatalog.essentialWithOptional.length})
+                    Optional only ({runnableCombinationCatalog.optionalOnly.length})
                   </ThemedText>
-                  {energyCombinationCatalog.essentialWithOptional.length === 0 ? (
-                    <ThemedText style={styles.muted}>
-                      No required + optional combination fits available energy.
-                    </ThemedText>
+                  {runnableCombinationCatalog.optionalOnly.length === 0 ? (
+                    <ThemedText style={styles.muted}>No optional-only feasible combination.</ThemedText>
                   ) : (
-                    <EnergyComboList
-                      combos={energyCombinationCatalog.essentialWithOptional}
-                      variant="valid"
+                    <RunnableComboList
+                      combos={runnableCombinationCatalog.optionalOnly}
+                      selectedId={selectedRunnableCombinationId}
+                      inverterMaxPowerW={inverterMaxPowerWValue}
                       availableEnergyWh={availableEnergyWh}
-                      showAll={showAllEnergyEssentialOptional}
-                      onToggleShowAll={() => setShowAllEnergyEssentialOptional((prev) => !prev)}
+                      showAll={showAllRunnableOptionalOnly}
+                      onToggleShowAll={() => setShowAllRunnableOptionalOnly((prev) => !prev)}
+                      onSelect={handleSelectRunnableCombination}
                     />
                   )}
 
                   <ThemedText type="defaultSemiBold" style={styles.inverterSectionTitle}>
-                    Cannot run together ({energyCombinationCatalog.invalid.length})
+                    Required + Optional ({runnableCombinationCatalog.essentialWithOptional.length})
                   </ThemedText>
-                  {energyCombinationCatalog.invalid.length === 0 ? (
-                    <ThemedText style={styles.muted}>Every listed combination fits energy rules.</ThemedText>
+                  {runnableCombinationCatalog.essentialWithOptional.length === 0 ? (
+                    <ThemedText style={styles.muted}>No required + optional feasible combination.</ThemedText>
                   ) : (
-                    <EnergyComboList
-                      combos={energyCombinationCatalog.invalid}
-                      variant="invalid"
+                    <RunnableComboList
+                      combos={runnableCombinationCatalog.essentialWithOptional}
+                      selectedId={selectedRunnableCombinationId}
+                      inverterMaxPowerW={inverterMaxPowerWValue}
                       availableEnergyWh={availableEnergyWh}
-                      showAll={showAllEnergyInvalid}
-                      onToggleShowAll={() => setShowAllEnergyInvalid((prev) => !prev)}
+                      showAll={showAllRunnableEssentialOptional}
+                      onToggleShowAll={() => setShowAllRunnableEssentialOptional((prev) => !prev)}
+                      onSelect={handleSelectRunnableCombination}
                     />
                   )}
                 </>
               )}
             </ThemedView>
           </ThemedView>
-        </ThemedView>
-
-        <ThemedView style={[styles.card, styles.infoNeutral]}>
-          <ThemedText type="subtitle">Devices ({devices.length})</ThemedText>
-          {devices.length === 0 ? (
-            <ThemedText style={styles.muted}>No products saved yet.</ThemedText>
-          ) : (
-            devices.map((d) => (
-              <ThemedView key={d.id} style={styles.deviceRowCard}>
-                <ThemedView style={styles.deviceRowTop}>
-                  <ThemedText type="defaultSemiBold">{d.name}</ThemedText>
-                  <ThemedText style={styles.devicePowerBadge}>{d.power} W</ThemedText>
-                </ThemedView>
-                <ThemedText style={styles.muted}>
-                  Priority {d.priority} · {d.essential ? 'mandatory' : 'optional'} · {d.duration} min
-                </ThemedText>
-              </ThemedView>
-            ))
-          )}
         </ThemedView>
       </ScrollView>
     </SafeAreaView>
@@ -1862,6 +1048,11 @@ const styles = StyleSheet.create({
     color: '#0a7ea4',
     fontSize: 15,
     fontWeight: '600',
+  },
+  columnCard: {
+    flex: 0,
+    flexGrow: 0,
+    alignSelf: 'stretch',
   },
   label: { fontSize: 14 },
   input: {
