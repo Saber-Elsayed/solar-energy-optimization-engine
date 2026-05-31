@@ -33,6 +33,7 @@ import {
   computePlanSustainabilityHours,
   type ForecastPoint,
 } from '@/lib/plan-sustainability';
+import { buildTwelveHourRunForecast } from '@/lib/twelve-hour-run-forecast';
 import { useEnabledDevices } from '@/lib/use-enabled-devices';
 
 type EnergyDataItem = {
@@ -354,8 +355,14 @@ function optimizeDevices(
   let activePowerW = 0;
   const allowed: DeviceDecision[] = [];
   const blocked: DeviceDecision[] = [];
-  const mandatoryDevices = devices.filter((d) => d.essential);
-  const optionalDevices = devices.filter((d) => !d.essential);
+  const priorityFirstDevices = [...devices].sort((a, b) => {
+    if (a.essential !== b.essential) {
+      return a.essential ? -1 : 1;
+    }
+    return b.priority - a.priority;
+  });
+  const mandatoryDevices = priorityFirstDevices.filter((d) => d.essential);
+  const optionalDevices = priorityFirstDevices.filter((d) => !d.essential);
   let totalDeviceEnergyWh = 0;
   let mandatoryEnergyWh = 0;
   let optionalEnergyWh = 0;
@@ -439,17 +446,11 @@ function optimizeDevices(
     evaluateDevice(device, 'mandatory');
   }
 
-  const optionalWithEnergy = optionalDevices
-    .map((device) => ({
-      device,
-      requiredEnergyWh: device.power * (device.duration / 60),
-    }))
-    .sort((a, b) => a.requiredEnergyWh - b.requiredEnergyWh);
-
-  for (const item of optionalWithEnergy) {
-    totalDeviceEnergyWh += item.requiredEnergyWh;
-    optionalEnergyWh += item.requiredEnergyWh;
-    evaluateDevice(item.device, 'optional');
+  for (const device of optionalDevices) {
+    const requiredEnergyWh = device.power * (device.duration / 60);
+    totalDeviceEnergyWh += requiredEnergyWh;
+    optionalEnergyWh += requiredEnergyWh;
+    evaluateDevice(device, 'optional');
   }
 
   const blockedMandatoryCount = blocked.filter((item) => item.device.essential).length;
@@ -586,6 +587,16 @@ export default function HomeScreen() {
       forecastPoints,
     });
   }, [selectedRunningPlan, batteryCapacityWhValue, availableEnergyWh, forecastPoints]);
+
+  const twelveHourRunForecast = useMemo(
+    () =>
+      buildTwelveHourRunForecast(allRunnableCombinations, {
+        initialBatteryWh: availableEnergyWh,
+        batteryCapacityWh: batteryCapacityWhValue,
+        forecastPoints,
+      }),
+    [allRunnableCombinations, availableEnergyWh, batteryCapacityWhValue, forecastPoints],
+  );
 
   const isOrPlanSelected = runningPlanSelection?.kind === 'or-tools';
 
@@ -967,6 +978,24 @@ export default function HomeScreen() {
               <ThemedText type="subtitle">Feasible Combinations (Inverter & Energy)</ThemedText>
               <ThemedText style={styles.muted}>Tap to browse and select a running plan</ThemedText>
             </Pressable>
+
+            <Pressable
+              style={({ pressed }) => [styles.card, styles.infoBlue, styles.columnCard, pressed && styles.buttonPressed]}
+              onPress={() =>
+                router.push({
+                  pathname: '/twelve-hour-forecast',
+                  params: { city: city.trim() || 'Tel Aviv' },
+                })
+              }>
+              <ThemedText type="subtitle">12-Hour Run Forecast</ThemedText>
+              <ThemedText style={styles.muted}>
+                {batteryCapacityWhValue <= 0
+                  ? 'Configure battery capacity to forecast 12-hour runs'
+                  : twelveHourRunForecast.fullHorizonPlans.length > 0
+                    ? `${twelveHourRunForecast.fullHorizonPlans.length} plan(s) can run ${twelveHourRunForecast.planningHorizonHours}h without draining · ${availableEnergyWh.toFixed(0)} Wh now`
+                    : `No full ${twelveHourRunForecast.planningHorizonHours}h plans with current battery & weather · ${availableEnergyWh.toFixed(0)} Wh now`}
+              </ThemedText>
+            </Pressable>
           </ThemedView>
 
           <ThemedView style={styles.optimizationColumn}>
@@ -1082,29 +1111,6 @@ export default function HomeScreen() {
             <ThemedText style={styles.muted}>
               Inverter limit: {inverterMaxPowerWValue.toFixed(0)} W · Active load: {optimization.activePowerW.toFixed(0)} W
             </ThemedText>
-            <ThemedText type="defaultSemiBold">Allowed Devices ({optimization.allowed.length})</ThemedText>
-            {optimization.allowed.length === 0 ? (
-              <ThemedText style={styles.muted}>No devices can run now.</ThemedText>
-            ) : (
-              optimization.allowed.map((item) => (
-                <ThemedText key={`allowed-${item.device.id}`}>
-                  - {item.device.name} ({item.device.essential ? 'Required' : 'Optional'}) - {item.deviceEnergyWh.toFixed(1)} Wh
-                </ThemedText>
-              ))
-            )}
-
-            <ThemedText type="defaultSemiBold" style={styles.blockedTitle}>
-              Blocked Devices ({optimization.blocked.length})
-            </ThemedText>
-            {optimization.blocked.length === 0 ? (
-              <ThemedText style={styles.muted}>No blocked devices.</ThemedText>
-            ) : (
-              optimization.blocked.map((item) => (
-                <ThemedText key={`blocked-${item.device.id}`}>
-                  - {item.device.name} ({item.device.essential ? 'Required' : 'Optional'}): {item.reason}
-                </ThemedText>
-              ))
-            )}
 
             {optimization.alternatives.length > 0 ? (
               <>

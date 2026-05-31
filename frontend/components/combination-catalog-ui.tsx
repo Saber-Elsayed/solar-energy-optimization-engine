@@ -3,6 +3,7 @@ import { Pressable, StyleSheet, Text } from 'react-native';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import type { EnergyCombinationSet, InverterPowerSet, RunnableCombination } from '@/lib/optimization-catalog';
+import type { TwelveHourRunPlan } from '@/lib/twelve-hour-run-forecast';
 
 export const INITIAL_INVERTER_COMBOS_SHOWN = 4;
 export const INITIAL_ENERGY_COMBOS_SHOWN = 4;
@@ -200,6 +201,71 @@ export function RunnableComboList({
   );
 }
 
+type TwelveHourRunComboListProps = {
+  plans: TwelveHourRunPlan[];
+  planningHorizonHours: number;
+  showAll: boolean;
+  onToggleShowAll: () => void;
+};
+
+export function TwelveHourRunComboList({
+  plans,
+  planningHorizonHours,
+  showAll,
+  onToggleShowAll,
+}: TwelveHourRunComboListProps) {
+  if (plans.length === 0) {
+    return null;
+  }
+
+  const visiblePlans = showAll ? plans : plans.slice(0, INITIAL_RUNNABLE_COMBOS_SHOWN);
+  const hiddenCount = Math.max(0, plans.length - INITIAL_RUNNABLE_COMBOS_SHOWN);
+
+  return (
+    <ThemedView style={comboStyles.comboList}>
+      {visiblePlans.map((plan) => (
+        <ThemedView key={`twelve-hour-${plan.id}`} style={comboStyles.twelveHourComboFrame}>
+          <ThemedText type="defaultSemiBold" style={comboStyles.twelveHourComboText}>
+            {plan.summary}
+          </ThemedText>
+          <ThemedText style={comboStyles.muted}>
+            {plan.essentialCount} required · {plan.optionalCount} optional · {plan.devices.length} device
+            {plan.devices.length === 1 ? '' : 's'} · load {plan.totalPowerW.toFixed(0)} W
+          </ThemedText>
+          <ThemedText style={comboStyles.muted}>
+            {plan.runsFullHorizon
+              ? `Runs all ${planningHorizonHours} forecast hours without draining the battery`
+              : `Runs ${plan.sustainability.sustainableHours} of ${planningHorizonHours} hours${
+                  plan.sustainability.limitingHour ? ` · limit at ${plan.sustainability.limitingHour}` : ''
+                }`}
+          </ThemedText>
+          {!plan.runsFullHorizon && plan.sustainability.lastSustainableHour ? (
+            <ThemedText style={comboStyles.muted}>
+              Covers continuous load through {plan.sustainability.lastSustainableHour}
+            </ThemedText>
+          ) : null}
+        </ThemedView>
+      ))}
+
+      {!showAll && hiddenCount > 0 ? (
+        <Pressable
+          style={({ pressed }) => [comboStyles.showAllButton, pressed && comboStyles.buttonPressed]}
+          onPress={onToggleShowAll}>
+          <Text style={comboStyles.showAllButtonText}>Show all ({hiddenCount} more)</Text>
+        </Pressable>
+      ) : null}
+
+      {showAll && plans.length > INITIAL_RUNNABLE_COMBOS_SHOWN ? (
+        <Pressable
+          style={({ pressed }) => [comboStyles.showAllButton, pressed && comboStyles.buttonPressed]}
+          onPress={onToggleShowAll}>
+          <Text style={comboStyles.showAllButtonText}>Show less</Text>
+        </Pressable>
+      ) : null}
+    </ThemedView>
+  );
+}
+
 export const comboStyles = StyleSheet.create({
   muted: { opacity: 0.7 },
   comboList: { gap: 10, marginBottom: 4 },
@@ -283,4 +349,13 @@ export const comboStyles = StyleSheet.create({
   runnableComboFrameSelected: { borderColor: '#1f7a34', backgroundColor: '#e8f8eb' },
   runnableComboText: { color: '#1f5c2e' },
   selectComboButtonText: { color: '#0a7ea4', fontSize: 13, fontWeight: '700', marginTop: 2 },
+  twelveHourComboFrame: {
+    borderWidth: 2,
+    borderColor: '#6ba3d9',
+    borderRadius: 10,
+    backgroundColor: '#ffffff',
+    padding: 12,
+    gap: 6,
+  },
+  twelveHourComboText: { color: '#1b4b7a' },
 });
