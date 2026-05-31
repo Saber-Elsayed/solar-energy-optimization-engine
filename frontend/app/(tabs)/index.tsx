@@ -16,8 +16,9 @@ import {
 } from '@/lib/api-config';
 import type { ApiDevice } from '@/lib/device-types';
 import {
-  getFeasibleSelection,
-  setFeasibleSelection,
+  clearRunningPlanSelection,
+  getRunningPlanSelection,
+  setOrToolsRunningPlan,
   subscribeFeasibleSelection,
 } from '@/lib/feasible-selection-store';
 import {
@@ -26,6 +27,11 @@ import {
   deviceEnergyWh,
   energyForDuration,
 } from '@/lib/optimization-catalog';
+import {
+  buildMock12hForecast,
+  computePlanSustainabilityHours,
+  type ForecastPoint,
+} from '@/lib/plan-sustainability';
 
 type EnergyDataItem = {
   voltage?: number;
@@ -300,6 +306,43 @@ type OrBestCombinationResponse = {
   solver_status: string;
 };
 
+type SelectedRunningPlanView = {
+  source: 'feasible' | 'or-tools';
+  summary: string;
+  devices: ApiDevice[];
+  totalPowerW: number;
+  totalEnergyWh: number;
+};
+
+function mapOrPlanDevices(orPlan: OrBestCombinationResponse, devices: ApiDevice[]): ApiDevice[] {
+  return orPlan.can_run.map((orDevice) => {
+    const match = devices.find((device) => device.name === orDevice.name && device.power === orDevice.power);
+    if (match) {
+      return match;
+    }
+    return {
+      id: `or-${orDevice.name}-${orDevice.power}`,
+      name: orDevice.name,
+      power: orDevice.power,
+      duration: orDevice.duration,
+      priority: orDevice.priority,
+      essential: orDevice.essential,
+      start_time: orDevice.start_time,
+      end_time: orDevice.end_time,
+    };
+  });
+}
+
+function buildOrPlanSummary(devices: ApiDevice[]): string {
+  if (devices.length === 0) {
+    return 'No devices selected';
+  }
+  const names = devices.map((device) => device.name).join(' + ');
+  const totalPowerW = devices.reduce((sum, device) => sum + device.power, 0);
+  const totalEnergyWh = devices.reduce((sum, device) => sum + deviceEnergyWh(device), 0);
+  return `${names} · ${totalPowerW.toFixed(0)} W · ${totalEnergyWh.toFixed(0)} Wh energy`;
+}
+
 function optimizeDevices(
   devices: ApiDevice[],
   availableEnergyWh: number,
@@ -462,9 +505,8 @@ export default function HomeScreen() {
   const [inverterMaxPowerWValue, setInverterMaxPowerWValue] = useState(DEFAULT_INVERTER_MAX_POWER_W);
   const inverterMaxPowerWRef = useRef(DEFAULT_INVERTER_MAX_POWER_W);
   const [weatherLoading, setWeatherLoading] = useState(false);
-  const [selectedRunnableCombinationId, setSelectedRunnableCombinationId] = useState<string | null>(() =>
-    getFeasibleSelection(),
-  );
+  const [forecastPoints, setForecastPoints] = useState<ForecastPoint[]>(() => buildMock12hForecast());
+  const [runningPlanSelection, setRunningPlanSelection] = useState(() => getRunningPlanSelection());
   const [orBestPlan, setOrBestPlan] = useState<OrBestCombinationResponse | null>(null);
   const [orBestLoading, setOrBestLoading] = useState(false);
   const [orBestError, setOrBestError] = useState<string | null>(null);
@@ -495,33 +537,93 @@ export default function HomeScreen() {
     ],
     [runnableCombinationCatalog],
   );
-  const selectedRunnableCombination = useMemo(
-    () => allRunnableCombinations.find((combo) => combo.id === selectedRunnableCombinationId) ?? null,
-    [allRunnableCombinations, selectedRunnableCombinationId],
-  );
+  const selectedRunnableCombination = useMemo(() => {
+    if (runningPlanSelection?.kind !== 'feasible') {
+      return null;
+    }
+    return allRunnableCombinations.find((combo) => combo.id === runningPlanSelection.combinationId) ?? null;
+  }, [allRunnableCombinations, runningPlanSelection]);
+
+  const selectedRunningPlan = useMemo((): SelectedRunningPlanView | null => {
+    if (runningPlanSelection?.kind === 'feasible' && selectedRunnableCombination) {
+      return {
+        source: 'feasible',
+        summary: selectedRunnableCombination.summary,
+        devices: selectedRunnableCombination.devices,
+        totalPowerW: selectedRunnableCombination.totalPowerW,
+        totalEnergyWh: selectedRunnableCombination.totalEnergyWh,
+      };
+    }
+    if (
+      runningPlanSelection?.kind === 'or-tools' &&
+      orBestPlan &&
+      orBestPlan.can_run.length > 0 &&
+      (orBestPlan.solver_status === 'OPTIMAL' || orBestPlan.solver_status === 'FEASIBLE')
+    ) {
+      const orDevices = mapOrPlanDevices(orBestPlan, devices);
+      return {
+        source: 'or-tools',
+        summary: buildOrPlanSummary(orDevices),
+        devices: orDevices,
+        totalPowerW: orBestPlan.total_power_w,
+        totalEnergyWh: orBestPlan.total_energy_wh,
+      };
+    }
+    return null;
+  }, [runningPlanSelection, selectedRunnableCombination, orBestPlan, devices]);
+
+  const selectedPlanSustainability = useMemo(() => {
+    if (!selectedRunningPlan || batteryCapacityWhValue <= 0) {
+      return null;
+    }
+    return computePlanSustainabilityHours({
+      totalPowerW: selectedRunningPlan.totalPowerW,
+      initialBatteryWh: availableEnergyWh,
+      batteryCapacityWh: batteryCapacityWhValue,
+      forecastPoints,
+    });
+  }, [selectedRunningPlan, batteryCapacityWhValue, availableEnergyWh, forecastPoints]);
+
+  const isOrPlanSelected = runningPlanSelection?.kind === 'or-tools';
 
   useFocusEffect(
     useCallback(() => {
-      setSelectedRunnableCombinationId(getFeasibleSelection());
+      setRunningPlanSelection(getRunningPlanSelection());
     }, []),
   );
 
   useEffect(() => {
     return subscribeFeasibleSelection(() => {
-      setSelectedRunnableCombinationId(getFeasibleSelection());
+      setRunningPlanSelection(getRunningPlanSelection());
     });
   }, []);
 
   useEffect(() => {
-    if (!selectedRunnableCombinationId) {
+    if (runningPlanSelection?.kind !== 'feasible') {
       return;
     }
-    const stillExists = allRunnableCombinations.some((combo) => combo.id === selectedRunnableCombinationId);
+    const stillExists = allRunnableCombinations.some(
+      (combo) => combo.id === runningPlanSelection.combinationId,
+    );
     if (!stillExists) {
-      setSelectedRunnableCombinationId(null);
-      setFeasibleSelection(null);
+      clearRunningPlanSelection();
+      setRunningPlanSelection(null);
     }
-  }, [allRunnableCombinations, selectedRunnableCombinationId]);
+  }, [allRunnableCombinations, runningPlanSelection]);
+
+  useEffect(() => {
+    if (runningPlanSelection?.kind !== 'or-tools') {
+      return;
+    }
+    const orPlanValid =
+      orBestPlan &&
+      orBestPlan.can_run.length > 0 &&
+      (orBestPlan.solver_status === 'OPTIMAL' || orBestPlan.solver_status === 'FEASIBLE');
+    if (!orPlanValid) {
+      clearRunningPlanSelection();
+      setRunningPlanSelection(null);
+    }
+  }, [runningPlanSelection, orBestPlan]);
 
   const fetchOrBestCombination = async (deviceList: ApiDevice[], targetCity: string) => {
     if (deviceList.length === 0) {
@@ -657,25 +759,68 @@ export default function HomeScreen() {
       }
 
       void fetchOrBestCombination(latestDevices, city.trim() || 'Tel Aviv');
+      void fetchForecastPoints(latestDevices, city.trim() || 'Tel Aviv');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const fetchForecastPoints = async (deviceList: ApiDevice[], targetCity: string) => {
+    try {
+      const payload = {
+        city: targetCity,
+        devices: deviceList.map(({ name, power, duration, priority, essential, start_time, end_time }) => ({
+          name,
+          power,
+          duration,
+          priority,
+          essential,
+          start_time: start_time ?? '00:00',
+          end_time: end_time ?? '23:59',
+        })),
+      };
+      const res = await fetch(OPTIMIZE_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) {
+        return;
+      }
+      const data = (await res.json()) as {
+        weather?: OptimizeWeather;
+        forecast_points?: ForecastPoint[];
+      };
+      if (data.weather) {
+        setWeather(data.weather);
+      }
+      if (Array.isArray(data.forecast_points) && data.forecast_points.length > 0) {
+        setForecastPoints(data.forecast_points);
+      }
+    } catch {
+      // Keep the mock forecast when the backend is unavailable.
     }
   };
 
   const fetchWeather = async (targetCity: string) => {
     setWeatherLoading(true);
     try {
-      const res = await fetch(OPTIMIZE_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ city: targetCity, devices: [] }),
-      });
-      if (!res.ok) return;
-      const data = (await res.json()) as { weather?: OptimizeWeather };
-      setWeather(data.weather ?? null);
+      await fetchForecastPoints(devices, targetCity);
     } finally {
       setWeatherLoading(false);
     }
+  };
+
+  const onSelectOrBestPlan = () => {
+    if (
+      !orBestPlan ||
+      orBestPlan.can_run.length === 0 ||
+      (orBestPlan.solver_status !== 'OPTIMAL' && orBestPlan.solver_status !== 'FEASIBLE')
+    ) {
+      return;
+    }
+    setOrToolsRunningPlan();
+    setRunningPlanSelection({ kind: 'or-tools' });
   };
 
   useEffect(() => {
@@ -827,7 +972,8 @@ export default function HomeScreen() {
                 OR-Tools is not installed on the server. Run: pip install ortools
               </ThemedText>
             ) : orBestPlan && orBestPlan.can_run.length > 0 ? (
-              <ThemedView style={styles.orBestPlanCard}>
+              <ThemedView
+                style={[styles.orBestPlanCard, isOrPlanSelected && styles.orBestPlanCardSelected]}>
                 <ThemedText style={styles.muted}>
                   Status: {orBestPlan.solver_status} · Score: {orBestPlan.objective_score} · Load{' '}
                   {orBestPlan.total_power_w.toFixed(0)} W · Energy {orBestPlan.total_energy_wh.toFixed(0)} Wh ·
@@ -839,6 +985,11 @@ export default function HomeScreen() {
                     {device.duration} min · {(device.power * (device.duration / 60)).toFixed(0)} Wh
                   </ThemedText>
                 ))}
+                <Pressable onPress={onSelectOrBestPlan} style={styles.selectPlanButton}>
+                  <ThemedText style={styles.selectPlanButtonText}>
+                    {isOrPlanSelected ? 'Running this OR-Tools plan' : 'Select & run this plan'}
+                  </ThemedText>
+                </Pressable>
               </ThemedView>
             ) : orBestPlan?.solver_status === 'INFEASIBLE' ? (
               <ThemedText style={styles.muted}>
@@ -854,18 +1005,47 @@ export default function HomeScreen() {
               <ThemedText style={styles.muted}>Waiting for OR-Tools recommendation…</ThemedText>
             )}
 
-            {selectedRunnableCombination ? (
+            {selectedRunningPlan ? (
               <>
                 <ThemedText type="defaultSemiBold" style={styles.selectedPlanTitle}>
                   Selected Running Plan
+                  {selectedRunningPlan.source === 'or-tools' ? ' (OR-Tools)' : ''}
                 </ThemedText>
                 <ThemedView style={styles.selectedPlanCard}>
-                  <ThemedText>{selectedRunnableCombination.summary}</ThemedText>
+                  <ThemedText>{selectedRunningPlan.summary}</ThemedText>
                   <ThemedText style={styles.muted}>
-                    Total load {selectedRunnableCombination.totalPowerW.toFixed(0)} W · Total energy{' '}
-                    {selectedRunnableCombination.totalEnergyWh.toFixed(0)} Wh
+                    Total load {selectedRunningPlan.totalPowerW.toFixed(0)} W · Total energy{' '}
+                    {selectedRunningPlan.totalEnergyWh.toFixed(0)} Wh
                   </ThemedText>
-                  {selectedRunnableCombination.devices.map((device) => (
+                  {selectedPlanSustainability ? (
+                    <ThemedView style={styles.sustainabilityCard}>
+                      <ThemedText type="defaultSemiBold">12-hour forward plan</ThemedText>
+                      <ThemedText>
+                        Sustainable for {selectedPlanSustainability.sustainableHours} of{' '}
+                        {selectedPlanSustainability.planningHorizonHours} hours without draining the battery.
+                      </ThemedText>
+                      {selectedPlanSustainability.sustainableHours > 0 &&
+                      selectedPlanSustainability.lastSustainableHour ? (
+                        <ThemedText style={styles.muted}>
+                          Covers continuous load through {selectedPlanSustainability.lastSustainableHour}
+                          {selectedPlanSustainability.limitingHour
+                            ? ` · Limit reached at ${selectedPlanSustainability.limitingHour}`
+                            : ' · Full 12-hour horizon covered'}
+                        </ThemedText>
+                      ) : (
+                        <ThemedText style={styles.muted}>
+                          Current battery + forecast solar cannot cover this load for even one hour.
+                          {selectedPlanSustainability.limitingHour
+                            ? ` Limit at ${selectedPlanSustainability.limitingHour}.`
+                            : ''}
+                        </ThemedText>
+                      )}
+                      <ThemedText style={styles.muted}>
+                        Projected battery after horizon: {selectedPlanSustainability.finalBatteryWh.toFixed(0)} Wh
+                      </ThemedText>
+                    </ThemedView>
+                  ) : null}
+                  {selectedRunningPlan.devices.map((device) => (
                     <ThemedText key={`selected-${device.id}`}>
                       - {device.name} ({device.essential ? 'Required' : 'Optional'}) · {device.power} W ·{' '}
                       {device.duration} min · {deviceEnergyWh(device).toFixed(0)} Wh
@@ -875,7 +1055,7 @@ export default function HomeScreen() {
               </>
             ) : (
               <ThemedText style={styles.muted}>
-                Select a plan on Feasible Combinations to display your running plan here.
+                Select a plan on Feasible Combinations or choose the OR-Tools best plan above.
               </ThemedText>
             )}
 
@@ -1181,6 +1361,19 @@ const styles = StyleSheet.create({
     padding: 12,
     gap: 6,
   },
+  orBestPlanCardSelected: {
+    borderColor: '#1f7a34',
+    backgroundColor: '#edf9ef',
+  },
+  selectPlanButton: {
+    marginTop: 4,
+    alignSelf: 'flex-start',
+  },
+  selectPlanButtonText: {
+    color: '#0a7ea4',
+    fontSize: 13,
+    fontWeight: '700',
+  },
   selectedPlanCard: {
     borderWidth: 2,
     borderColor: '#1f7a34',
@@ -1188,6 +1381,14 @@ const styles = StyleSheet.create({
     backgroundColor: '#edf9ef',
     padding: 12,
     gap: 6,
+  },
+  sustainabilityCard: {
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#7fb87f',
+    borderRadius: 8,
+    backgroundColor: '#f7fcf8',
+    padding: 10,
+    gap: 4,
   },
   energyComboFrameValid: {
     borderWidth: 2,

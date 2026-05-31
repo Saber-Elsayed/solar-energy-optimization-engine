@@ -78,6 +78,10 @@ class MultiScenarioResponse(BaseModel):
 
     scenarios: List[ScenarioResult] = Field(default_factory=list)
     forecast: List[ForecastHourResult] = Field(default_factory=list)
+    forecast_points: List[ForecastPoint] = Field(
+        default_factory=list,
+        description="12-hour solar energy forecast inputs used for forward planning.",
+    )
     alerts: List[str] = Field(default_factory=list)
     weather: WeatherInfo
 

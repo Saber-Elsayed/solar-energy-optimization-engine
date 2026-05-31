@@ -284,6 +284,7 @@ def optimize_devices(body: OptimizeRequest) -> MultiScenarioResponse:
             ScenarioResult(name="Performance", **performance_result.model_dump()),
         ],
         forecast=forecast_results,
+        forecast_points=forecast_points,
         alerts=alerts,
         weather=weather_info,
     )
