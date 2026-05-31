@@ -1,9 +1,8 @@
-import { useRouter } from 'expo-router';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useFocusEffect, useRouter } from 'expo-router';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, TextInput } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { RunnableComboList } from '@/components/combination-catalog-ui';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import {
@@ -12,15 +11,20 @@ import {
   DEVICES_URL,
   ENERGY_LATEST_URL,
   OPTIMIZE_URL,
+  OPTIMIZE_BEST_URL,
   SOLAR_SYSTEM_URL,
 } from '@/lib/api-config';
 import type { ApiDevice } from '@/lib/device-types';
+import {
+  getFeasibleSelection,
+  setFeasibleSelection,
+  subscribeFeasibleSelection,
+} from '@/lib/feasible-selection-store';
 import {
   buildDevicesCatalogSignature,
   buildRunnableCombinationCatalog,
   deviceEnergyWh,
   energyForDuration,
-  MAX_INVERTER_ENUM_DEVICES,
 } from '@/lib/optimization-catalog';
 
 type EnergyDataItem = {
@@ -279,6 +283,23 @@ type SolarSystemProfileResponse = {
   inverter_max_power_w: number;
 };
 
+type OrBestCombinationResponse = {
+  can_run: Array<{
+    name: string;
+    power: number;
+    duration: number;
+    priority: number;
+    essential: boolean;
+    start_time: string;
+    end_time: string;
+  }>;
+  total_power_w: number;
+  total_energy_wh: number;
+  remaining_energy_wh: number;
+  objective_score: number;
+  solver_status: string;
+};
+
 function optimizeDevices(
   devices: ApiDevice[],
   availableEnergyWh: number,
@@ -441,10 +462,12 @@ export default function HomeScreen() {
   const [inverterMaxPowerWValue, setInverterMaxPowerWValue] = useState(DEFAULT_INVERTER_MAX_POWER_W);
   const inverterMaxPowerWRef = useRef(DEFAULT_INVERTER_MAX_POWER_W);
   const [weatherLoading, setWeatherLoading] = useState(false);
-  const [selectedRunnableCombinationId, setSelectedRunnableCombinationId] = useState<string | null>(null);
-  const [showAllRunnableEssentialOnly, setShowAllRunnableEssentialOnly] = useState(false);
-  const [showAllRunnableOptionalOnly, setShowAllRunnableOptionalOnly] = useState(false);
-  const [showAllRunnableEssentialOptional, setShowAllRunnableEssentialOptional] = useState(false);
+  const [selectedRunnableCombinationId, setSelectedRunnableCombinationId] = useState<string | null>(() =>
+    getFeasibleSelection(),
+  );
+  const [orBestPlan, setOrBestPlan] = useState<OrBestCombinationResponse | null>(null);
+  const [orBestLoading, setOrBestLoading] = useState(false);
+  const [orBestError, setOrBestError] = useState<string | null>(null);
 
   const voltage = typeof battery?.voltage === 'number' ? battery.voltage : 0;
   const current = typeof battery?.current === 'number' ? battery.current : 0;
@@ -460,18 +483,9 @@ export default function HomeScreen() {
     () => optimizeDevices(devices, availableEnergyWh, inverterMaxPowerWValue),
     [devices, availableEnergyWh, inverterMaxPowerWValue],
   );
-  const devicesCatalogSignature = useMemo(() => buildDevicesCatalogSignature(devices), [devices]);
-  const energyCatalogSignature = useMemo(
-    () => `${devicesCatalogSignature}|${availableEnergyWh.toFixed(1)}`,
-    [devicesCatalogSignature, availableEnergyWh],
-  );
   const runnableCombinationCatalog = useMemo(
     () => buildRunnableCombinationCatalog(devices, inverterMaxPowerWValue, availableEnergyWh),
     [devices, inverterMaxPowerWValue, availableEnergyWh],
-  );
-  const runnableCatalogSignature = useMemo(
-    () => `${energyCatalogSignature}|inv:${inverterMaxPowerWValue.toFixed(0)}`,
-    [energyCatalogSignature, inverterMaxPowerWValue],
   );
   const allRunnableCombinations = useMemo(
     () => [
@@ -486,11 +500,17 @@ export default function HomeScreen() {
     [allRunnableCombinations, selectedRunnableCombinationId],
   );
 
+  useFocusEffect(
+    useCallback(() => {
+      setSelectedRunnableCombinationId(getFeasibleSelection());
+    }, []),
+  );
+
   useEffect(() => {
-    setShowAllRunnableEssentialOnly(false);
-    setShowAllRunnableOptionalOnly(false);
-    setShowAllRunnableEssentialOptional(false);
-  }, [runnableCatalogSignature]);
+    return subscribeFeasibleSelection(() => {
+      setSelectedRunnableCombinationId(getFeasibleSelection());
+    });
+  }, []);
 
   useEffect(() => {
     if (!selectedRunnableCombinationId) {
@@ -499,11 +519,49 @@ export default function HomeScreen() {
     const stillExists = allRunnableCombinations.some((combo) => combo.id === selectedRunnableCombinationId);
     if (!stillExists) {
       setSelectedRunnableCombinationId(null);
+      setFeasibleSelection(null);
     }
   }, [allRunnableCombinations, selectedRunnableCombinationId]);
 
-  const handleSelectRunnableCombination = (comboId: string) => {
-    setSelectedRunnableCombinationId((prev) => (prev === comboId ? null : comboId));
+  const fetchOrBestCombination = async (deviceList: ApiDevice[], targetCity: string) => {
+    if (deviceList.length === 0) {
+      setOrBestPlan(null);
+      setOrBestError(null);
+      return;
+    }
+    setOrBestLoading(true);
+    setOrBestError(null);
+    try {
+      const payload = {
+        city: targetCity,
+        devices: deviceList.map(({ name, power, duration, priority, essential, start_time, end_time }) => ({
+          name,
+          power,
+          duration,
+          priority,
+          essential,
+          start_time: start_time ?? '00:00',
+          end_time: end_time ?? '23:59',
+        })),
+      };
+      const res = await fetch(OPTIMIZE_BEST_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) {
+        setOrBestPlan(null);
+        setOrBestError(`OR request failed (${res.status}). Restart the backend after installing ortools.`);
+        return;
+      }
+      const data = (await res.json()) as OrBestCombinationResponse;
+      setOrBestPlan(data);
+    } catch {
+      setOrBestPlan(null);
+      setOrBestError('Could not reach OR-Tools endpoint. Check that the backend is running.');
+    } finally {
+      setOrBestLoading(false);
+    }
   };
 
   const evaluateAlerts = (latestSoc: number | undefined, latestAvailableEnergyWh: number) => {
@@ -565,6 +623,7 @@ export default function HomeScreen() {
         prev === inverterMaxPowerWForCalc ? prev : inverterMaxPowerWForCalc,
       );
 
+      let latestDevices: ApiDevice[] = [];
       const [devicesRes, energyRes] = await Promise.all([
         fetch(`${DEVICES_URL}?t=${Date.now()}`),
         fetch(`${ENERGY_LATEST_URL}?t=${Date.now()}`),
@@ -572,6 +631,7 @@ export default function HomeScreen() {
       if (devicesRes.ok) {
         const devicesData = (await devicesRes.json()) as ApiDevice[];
         if (Array.isArray(devicesData)) {
+          latestDevices = devicesData;
           const nextSignature = buildDevicesCatalogSignature(devicesData);
           setDevices((prev) =>
             buildDevicesCatalogSignature(prev) === nextSignature ? prev : devicesData,
@@ -595,6 +655,8 @@ export default function HomeScreen() {
         setBattery(latest);
         evaluateAlerts(latest?.soc, latestAvailableEnergyWh);
       }
+
+      void fetchOrBestCombination(latestDevices, city.trim() || 'Tel Aviv');
     } finally {
       setLoading(false);
     }
@@ -740,11 +802,57 @@ export default function HomeScreen() {
               <ThemedText type="subtitle">Devices Overview</ThemedText>
               <ThemedText style={styles.muted}>Power, schedule, and energy per device</ThemedText>
             </Pressable>
+
+            <Pressable
+              style={({ pressed }) => [styles.card, styles.infoBlue, styles.columnCard, pressed && styles.buttonPressed]}
+              onPress={() => router.push('/feasible-combinations')}>
+              <ThemedText type="subtitle">Feasible Combinations (Inverter & Energy)</ThemedText>
+              <ThemedText style={styles.muted}>Tap to browse and select a running plan</ThemedText>
+            </Pressable>
           </ThemedView>
 
           <ThemedView style={styles.optimizationColumn}>
             <ThemedView style={[styles.card, styles.safeGreen]}>
             <ThemedText type="subtitle">Optimization Results</ThemedText>
+
+            <ThemedText type="defaultSemiBold" style={styles.orBestTitle}>
+              OR-Tools Best Plan (recommended)
+            </ThemedText>
+            {orBestLoading ? (
+              <ActivityIndicator size="small" color="#0a7ea4" />
+            ) : orBestError ? (
+              <ThemedText style={styles.muted}>{orBestError}</ThemedText>
+            ) : orBestPlan?.solver_status === 'UNAVAILABLE' ? (
+              <ThemedText style={styles.muted}>
+                OR-Tools is not installed on the server. Run: pip install ortools
+              </ThemedText>
+            ) : orBestPlan && orBestPlan.can_run.length > 0 ? (
+              <ThemedView style={styles.orBestPlanCard}>
+                <ThemedText style={styles.muted}>
+                  Status: {orBestPlan.solver_status} · Score: {orBestPlan.objective_score} · Load{' '}
+                  {orBestPlan.total_power_w.toFixed(0)} W · Energy {orBestPlan.total_energy_wh.toFixed(0)} Wh ·
+                  Headroom {orBestPlan.remaining_energy_wh.toFixed(0)} Wh
+                </ThemedText>
+                {orBestPlan.can_run.map((device) => (
+                  <ThemedText key={`or-best-${device.name}-${device.power}`}>
+                    - {device.name} ({device.essential ? 'Required' : 'Optional'}) · {device.power} W ·{' '}
+                    {device.duration} min · {(device.power * (device.duration / 60)).toFixed(0)} Wh
+                  </ThemedText>
+                ))}
+              </ThemedView>
+            ) : orBestPlan?.solver_status === 'INFEASIBLE' ? (
+              <ThemedText style={styles.muted}>
+                No combination satisfies inverter and energy limits right now.
+              </ThemedText>
+            ) : orBestPlan && (orBestPlan.solver_status === 'OPTIMAL' || orBestPlan.solver_status === 'FEASIBLE') ? (
+              <ThemedText style={styles.muted}>
+                OR found no devices to run under current inverter and energy limits.
+              </ThemedText>
+            ) : devices.length === 0 ? (
+              <ThemedText style={styles.muted}>Add devices to compute the OR-Tools best plan.</ThemedText>
+            ) : (
+              <ThemedText style={styles.muted}>Waiting for OR-Tools recommendation…</ThemedText>
+            )}
 
             {selectedRunnableCombination ? (
               <>
@@ -767,7 +875,7 @@ export default function HomeScreen() {
               </>
             ) : (
               <ThemedText style={styles.muted}>
-                Select a feasible combination below to display your running plan here.
+                Select a plan on Feasible Combinations to display your running plan here.
               </ThemedText>
             )}
 
@@ -856,83 +964,6 @@ export default function HomeScreen() {
               </>
             ) : null}
           </ThemedView>
-
-            <ThemedView style={[styles.card, styles.runnableCatalogCard]}>
-              <ThemedText type="subtitle">Feasible Combinations (Inverter & Energy)</ThemedText>
-              <ThemedText style={styles.muted}>
-                Intersection of combinations that satisfy inverter power, battery energy, and required/optional rules.
-                Tap a combination to run it.
-              </ThemedText>
-
-              {devices.length === 0 ? (
-                <ThemedText style={styles.muted}>Add devices to see feasible combinations.</ThemedText>
-              ) : runnableCombinationCatalog.noEnergyAvailable ? (
-                <ThemedText style={styles.muted}>
-                  Configure battery capacity and SOC to calculate feasible combinations.
-                </ThemedText>
-              ) : runnableCombinationCatalog.tooManyDevices ? (
-                <ThemedText style={styles.muted}>
-                  Too many devices to list all combinations (max {MAX_INVERTER_ENUM_DEVICES}).
-                </ThemedText>
-              ) : allRunnableCombinations.length === 0 ? (
-                <ThemedText style={styles.muted}>
-                  No combination satisfies both inverter and energy limits at the same time.
-                </ThemedText>
-              ) : (
-                <>
-                  <ThemedText type="defaultSemiBold" style={styles.inverterSectionTitle}>
-                    Required only ({runnableCombinationCatalog.essentialOnly.length})
-                  </ThemedText>
-                  {runnableCombinationCatalog.essentialOnly.length === 0 ? (
-                    <ThemedText style={styles.muted}>No required-only feasible combination.</ThemedText>
-                  ) : (
-                    <RunnableComboList
-                      combos={runnableCombinationCatalog.essentialOnly}
-                      selectedId={selectedRunnableCombinationId}
-                      inverterMaxPowerW={inverterMaxPowerWValue}
-                      availableEnergyWh={availableEnergyWh}
-                      showAll={showAllRunnableEssentialOnly}
-                      onToggleShowAll={() => setShowAllRunnableEssentialOnly((prev) => !prev)}
-                      onSelect={handleSelectRunnableCombination}
-                    />
-                  )}
-
-                  <ThemedText type="defaultSemiBold" style={styles.inverterSectionTitle}>
-                    Optional only ({runnableCombinationCatalog.optionalOnly.length})
-                  </ThemedText>
-                  {runnableCombinationCatalog.optionalOnly.length === 0 ? (
-                    <ThemedText style={styles.muted}>No optional-only feasible combination.</ThemedText>
-                  ) : (
-                    <RunnableComboList
-                      combos={runnableCombinationCatalog.optionalOnly}
-                      selectedId={selectedRunnableCombinationId}
-                      inverterMaxPowerW={inverterMaxPowerWValue}
-                      availableEnergyWh={availableEnergyWh}
-                      showAll={showAllRunnableOptionalOnly}
-                      onToggleShowAll={() => setShowAllRunnableOptionalOnly((prev) => !prev)}
-                      onSelect={handleSelectRunnableCombination}
-                    />
-                  )}
-
-                  <ThemedText type="defaultSemiBold" style={styles.inverterSectionTitle}>
-                    Required + Optional ({runnableCombinationCatalog.essentialWithOptional.length})
-                  </ThemedText>
-                  {runnableCombinationCatalog.essentialWithOptional.length === 0 ? (
-                    <ThemedText style={styles.muted}>No required + optional feasible combination.</ThemedText>
-                  ) : (
-                    <RunnableComboList
-                      combos={runnableCombinationCatalog.essentialWithOptional}
-                      selectedId={selectedRunnableCombinationId}
-                      inverterMaxPowerW={inverterMaxPowerWValue}
-                      availableEnergyWh={availableEnergyWh}
-                      showAll={showAllRunnableEssentialOptional}
-                      onToggleShowAll={() => setShowAllRunnableEssentialOptional((prev) => !prev)}
-                      onSelect={handleSelectRunnableCombination}
-                    />
-                  )}
-                </>
-              )}
-            </ThemedView>
           </ThemedView>
         </ThemedView>
       </ScrollView>
@@ -1138,6 +1169,17 @@ const styles = StyleSheet.create({
   },
   selectedPlanTitle: {
     marginTop: 4,
+  },
+  orBestTitle: {
+    marginTop: 4,
+  },
+  orBestPlanCard: {
+    borderWidth: 2,
+    borderColor: '#1f5c9e',
+    borderRadius: 10,
+    backgroundColor: '#eef5ff',
+    padding: 12,
+    gap: 6,
   },
   selectedPlanCard: {
     borderWidth: 2,

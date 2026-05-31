@@ -81,3 +81,18 @@ class MultiScenarioResponse(BaseModel):
     alerts: List[str] = Field(default_factory=list)
     weather: WeatherInfo
 
+
+class BestCombinationResponse(BaseModel):
+    """OR-Tools optimal subset under inverter, energy, schedule, and essential/optional rules."""
+
+    can_run: List[DeviceItem] = Field(default_factory=list)
+    cannot_run: List[CannotRunItem] = Field(default_factory=list)
+    total_power_w: float = Field(..., ge=0)
+    total_energy_wh: float = Field(..., ge=0)
+    remaining_energy_wh: float = Field(..., ge=0)
+    objective_score: int = Field(..., ge=0, description="Weighted priority score of the selected set.")
+    solver_status: str = Field(
+        ...,
+        description="OPTIMAL, FEASIBLE, INFEASIBLE, or UNAVAILABLE (ortools not installed).",
+    )
+
