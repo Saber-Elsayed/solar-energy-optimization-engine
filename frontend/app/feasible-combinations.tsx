@@ -12,12 +12,14 @@ import {
   SOLAR_SYSTEM_URL,
 } from '@/lib/api-config';
 import type { ApiDevice } from '@/lib/device-types';
+import { pruneDisabledDeviceIds } from '@/lib/device-enabled-store';
 import { getFeasibleSelection, setFeasibleSelection } from '@/lib/feasible-selection-store';
 import {
   buildDevicesCatalogSignature,
   buildRunnableCombinationCatalog,
   MAX_INVERTER_ENUM_DEVICES,
 } from '@/lib/optimization-catalog';
+import { useEnabledDevices } from '@/lib/use-enabled-devices';
 
 type EnergyDataItem = { soc?: number };
 
@@ -28,6 +30,7 @@ type SolarSystemProfileResponse = {
 
 export default function FeasibleCombinationsScreen() {
   const [devices, setDevices] = useState<ApiDevice[]>([]);
+  const activeDevices = useEnabledDevices(devices);
   const [loading, setLoading] = useState(true);
   const [batteryCapacityWhValue, setBatteryCapacityWhValue] = useState(0);
   const batteryCapacityWhRef = useRef(0);
@@ -47,8 +50,8 @@ export default function FeasibleCombinationsScreen() {
   }, [batteryCapacityWhValue, soc]);
 
   const runnableCombinationCatalog = useMemo(
-    () => buildRunnableCombinationCatalog(devices, inverterMaxPowerWValue, availableEnergyWh),
-    [devices, inverterMaxPowerWValue, availableEnergyWh],
+    () => buildRunnableCombinationCatalog(activeDevices, inverterMaxPowerWValue, availableEnergyWh),
+    [activeDevices, inverterMaxPowerWValue, availableEnergyWh],
   );
 
   const allRunnableCombinations = useMemo(
@@ -60,7 +63,7 @@ export default function FeasibleCombinationsScreen() {
     [runnableCombinationCatalog],
   );
 
-  const devicesCatalogSignature = useMemo(() => buildDevicesCatalogSignature(devices), [devices]);
+  const devicesCatalogSignature = useMemo(() => buildDevicesCatalogSignature(activeDevices), [activeDevices]);
   const runnableCatalogSignature = useMemo(
     () => `${devicesCatalogSignature}|${availableEnergyWh.toFixed(1)}|inv:${inverterMaxPowerWValue.toFixed(0)}`,
     [devicesCatalogSignature, availableEnergyWh, inverterMaxPowerWValue],
@@ -111,6 +114,7 @@ export default function FeasibleCombinationsScreen() {
         if (devicesRes.ok) {
           const data = (await devicesRes.json()) as ApiDevice[];
           if (Array.isArray(data)) {
+            pruneDisabledDeviceIds(data.map((device) => device.id));
             setDevices(data);
           }
         }

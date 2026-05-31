@@ -12,6 +12,7 @@ import {
   SOLAR_SYSTEM_URL,
 } from '@/lib/api-config';
 import type { ApiDevice } from '@/lib/device-types';
+import { pruneDisabledDeviceIds } from '@/lib/device-enabled-store';
 import {
   buildDevicesCatalogSignature,
   buildEnergyCombinationCatalog,
@@ -19,6 +20,7 @@ import {
   MAX_ENERGY_ENUM_DEVICES,
   MAX_INVERTER_ENUM_DEVICES,
 } from '@/lib/optimization-catalog';
+import { useEnabledDevices } from '@/lib/use-enabled-devices';
 
 type EnergyDataItem = { soc?: number };
 
@@ -29,6 +31,7 @@ type SolarSystemProfileResponse = {
 
 export default function ConstraintCombinationsScreen() {
   const [devices, setDevices] = useState<ApiDevice[]>([]);
+  const activeDevices = useEnabledDevices(devices);
   const [loading, setLoading] = useState(true);
   const [batteryCapacityWhValue, setBatteryCapacityWhValue] = useState(0);
   const batteryCapacityWhRef = useRef(0);
@@ -52,15 +55,15 @@ export default function ConstraintCombinationsScreen() {
   }, [batteryCapacityWhValue, soc]);
 
   const inverterPowerCatalog = useMemo(
-    () => buildInverterPowerCatalog(devices, inverterMaxPowerWValue),
-    [devices, inverterMaxPowerWValue],
+    () => buildInverterPowerCatalog(activeDevices, inverterMaxPowerWValue),
+    [activeDevices, inverterMaxPowerWValue],
   );
   const energyCombinationCatalog = useMemo(
-    () => buildEnergyCombinationCatalog(devices, availableEnergyWh),
-    [devices, availableEnergyWh],
+    () => buildEnergyCombinationCatalog(activeDevices, availableEnergyWh),
+    [activeDevices, availableEnergyWh],
   );
 
-  const devicesCatalogSignature = useMemo(() => buildDevicesCatalogSignature(devices), [devices]);
+  const devicesCatalogSignature = useMemo(() => buildDevicesCatalogSignature(activeDevices), [activeDevices]);
   const energyCatalogSignature = useMemo(
     () => `${devicesCatalogSignature}|${availableEnergyWh.toFixed(1)}`,
     [devicesCatalogSignature, availableEnergyWh],
@@ -108,6 +111,7 @@ export default function ConstraintCombinationsScreen() {
         if (devicesRes.ok) {
           const data = (await devicesRes.json()) as ApiDevice[];
           if (Array.isArray(data)) {
+            pruneDisabledDeviceIds(data.map((device) => device.id));
             setDevices(data);
           }
         }

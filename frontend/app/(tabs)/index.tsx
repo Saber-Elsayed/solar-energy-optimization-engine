@@ -15,6 +15,7 @@ import {
   SOLAR_SYSTEM_URL,
 } from '@/lib/api-config';
 import type { ApiDevice } from '@/lib/device-types';
+import { filterEnabledDevices, pruneDisabledDeviceIds, subscribeDeviceEnabled } from '@/lib/device-enabled-store';
 import {
   clearRunningPlanSelection,
   getRunningPlanSelection,
@@ -32,6 +33,7 @@ import {
   computePlanSustainabilityHours,
   type ForecastPoint,
 } from '@/lib/plan-sustainability';
+import { useEnabledDevices } from '@/lib/use-enabled-devices';
 
 type EnergyDataItem = {
   voltage?: number;
@@ -492,6 +494,7 @@ export default function HomeScreen() {
   const previousVoltage = useRef<number | null>(null);
 
   const [devices, setDevices] = useState<ApiDevice[]>([]);
+  const activeDevices = useEnabledDevices(devices);
   const [battery, setBattery] = useState<EnergyDataItem | null>(null);
   const [loading, setLoading] = useState(true);
   const [alerts, setAlerts] = useState<string[]>([]);
@@ -522,12 +525,12 @@ export default function HomeScreen() {
     return batteryCapacityWhValue;
   }, [batteryCapacityWhValue, soc, socNormalized]);
   const optimization = useMemo(
-    () => optimizeDevices(devices, availableEnergyWh, inverterMaxPowerWValue),
-    [devices, availableEnergyWh, inverterMaxPowerWValue],
+    () => optimizeDevices(activeDevices, availableEnergyWh, inverterMaxPowerWValue),
+    [activeDevices, availableEnergyWh, inverterMaxPowerWValue],
   );
   const runnableCombinationCatalog = useMemo(
-    () => buildRunnableCombinationCatalog(devices, inverterMaxPowerWValue, availableEnergyWh),
-    [devices, inverterMaxPowerWValue, availableEnergyWh],
+    () => buildRunnableCombinationCatalog(activeDevices, inverterMaxPowerWValue, availableEnergyWh),
+    [activeDevices, inverterMaxPowerWValue, availableEnergyWh],
   );
   const allRunnableCombinations = useMemo(
     () => [
@@ -560,7 +563,7 @@ export default function HomeScreen() {
       orBestPlan.can_run.length > 0 &&
       (orBestPlan.solver_status === 'OPTIMAL' || orBestPlan.solver_status === 'FEASIBLE')
     ) {
-      const orDevices = mapOrPlanDevices(orBestPlan, devices);
+      const orDevices = mapOrPlanDevices(orBestPlan, activeDevices);
       return {
         source: 'or-tools',
         summary: buildOrPlanSummary(orDevices),
@@ -570,7 +573,7 @@ export default function HomeScreen() {
       };
     }
     return null;
-  }, [runningPlanSelection, selectedRunnableCombination, orBestPlan, devices]);
+  }, [runningPlanSelection, selectedRunnableCombination, orBestPlan, activeDevices]);
 
   const selectedPlanSustainability = useMemo(() => {
     if (!selectedRunningPlan || batteryCapacityWhValue <= 0) {
@@ -666,10 +669,10 @@ export default function HomeScreen() {
     }
   };
 
-  const evaluateAlerts = (latestSoc: number | undefined, latestAvailableEnergyWh: number) => {
+  const evaluateAlerts = (latestSoc: number | undefined, latestAvailableEnergyWh: number, deviceList: ApiDevice[]) => {
     const dynamicAlerts: string[] = [];
     const socValue = typeof latestSoc === 'number' ? latestSoc : null;
-    const nextHourUsageWh = devices.reduce((sum, d) => sum + d.power * (d.duration / 60), 0);
+    const nextHourUsageWh = deviceList.reduce((sum, d) => sum + d.power * (d.duration / 60), 0);
 
     if (socValue !== null && socValue < 25) {
       dynamicAlerts.push('⚠️ Low battery level');
@@ -734,6 +737,7 @@ export default function HomeScreen() {
         const devicesData = (await devicesRes.json()) as ApiDevice[];
         if (Array.isArray(devicesData)) {
           latestDevices = devicesData;
+          pruneDisabledDeviceIds(devicesData.map((device) => device.id));
           const nextSignature = buildDevicesCatalogSignature(devicesData);
           setDevices((prev) =>
             buildDevicesCatalogSignature(prev) === nextSignature ? prev : devicesData,
@@ -755,11 +759,12 @@ export default function HomeScreen() {
           available_energy: latestAvailableEnergyWh,
         });
         setBattery(latest);
-        evaluateAlerts(latest?.soc, latestAvailableEnergyWh);
+        evaluateAlerts(latest?.soc, latestAvailableEnergyWh, filterEnabledDevices(latestDevices));
       }
 
-      void fetchOrBestCombination(latestDevices, city.trim() || 'Tel Aviv');
-      void fetchForecastPoints(latestDevices, city.trim() || 'Tel Aviv');
+      const enabledDevices = filterEnabledDevices(latestDevices);
+      void fetchOrBestCombination(enabledDevices, city.trim() || 'Tel Aviv');
+      void fetchForecastPoints(enabledDevices, city.trim() || 'Tel Aviv');
     } finally {
       setLoading(false);
     }
@@ -805,7 +810,7 @@ export default function HomeScreen() {
   const fetchWeather = async (targetCity: string) => {
     setWeatherLoading(true);
     try {
-      await fetchForecastPoints(devices, targetCity);
+      await fetchForecastPoints(activeDevices, targetCity);
     } finally {
       setWeatherLoading(false);
     }
@@ -822,6 +827,14 @@ export default function HomeScreen() {
     setOrToolsRunningPlan();
     setRunningPlanSelection({ kind: 'or-tools' });
   };
+
+  useEffect(() => {
+    return subscribeDeviceEnabled(() => {
+      const enabledDevices = filterEnabledDevices(devices);
+      void fetchOrBestCombination(enabledDevices, city.trim() || 'Tel Aviv');
+      void fetchForecastPoints(enabledDevices, city.trim() || 'Tel Aviv');
+    });
+  }, [devices, city]);
 
   useEffect(() => {
     void fetchDashboardData();
@@ -999,8 +1012,12 @@ export default function HomeScreen() {
               <ThemedText style={styles.muted}>
                 OR found no devices to run under current inverter and energy limits.
               </ThemedText>
-            ) : devices.length === 0 ? (
-              <ThemedText style={styles.muted}>Add devices to compute the OR-Tools best plan.</ThemedText>
+            ) : activeDevices.length === 0 ? (
+              <ThemedText style={styles.muted}>
+                {devices.length === 0
+                  ? 'Add devices to compute the OR-Tools best plan.'
+                  : 'All devices are turned off. Enable products in Devices Overview.'}
+              </ThemedText>
             ) : (
               <ThemedText style={styles.muted}>Waiting for OR-Tools recommendation…</ThemedText>
             )}
