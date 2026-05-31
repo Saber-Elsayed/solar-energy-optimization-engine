@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from datetime import datetime
 from typing import List
 
 from ..models.device import DeviceItem
@@ -115,16 +116,26 @@ def build_forecast_constraints(
     )
 
 
+def solar_energy_score_for_clock_hour(hhmm: str) -> float:
+    """Approximate daylight score for mock forecasts; 0 during night hours."""
+    hour_of_day = hhmm_to_minutes(hhmm) // 60
+    if hour_of_day < 6 or hour_of_day >= 20:
+        return 0.0
+    daylight_factor = max(0.0, 1.0 - abs(hour_of_day - 13) / 7.0)
+    return daylight_factor * 5.0
+
+
 def build_mock_12h_forecast(start_hhmm: str) -> List[ForecastPoint]:
     start_minutes = hhmm_to_minutes(start_hhmm)
-    energy_curve = [5, 4, 3, 2.5, 2, 1.5, 1, 0.5, 0.5, 1, 2, 3]
 
     forecast: List[ForecastPoint] = []
-    for idx, energy in enumerate(energy_curve):
+    for idx in range(12):
         hour_minutes = (start_minutes + idx * 60) % (24 * 60)
         hh = hour_minutes // 60
         mm = hour_minutes % 60
-        forecast.append(ForecastPoint(hour=f"{hh:02d}:{mm:02d}", energy=energy))
+        hour = f"{hh:02d}:{mm:02d}"
+        energy = solar_energy_score_for_clock_hour(hour)
+        forecast.append(ForecastPoint(hour=hour, energy=energy, is_day=energy > 0))
     return forecast
 
 
@@ -214,7 +225,7 @@ def run_optimization_for_order(
 
 
 def optimize_devices(body: OptimizeRequest) -> MultiScenarioResponse:
-    fallback_time = "12:00"
+    fallback_time = datetime.now().strftime("%H:%M")
     battery_capacity_wh, inverter_max_power_w = resolve_battery_capacity_and_inverter()
     soc_percent = resolve_soc_percent()
     current_constraints = build_current_constraints(

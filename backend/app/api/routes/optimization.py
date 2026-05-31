@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from fastapi import APIRouter
 
 from ...models.optimization import BestCombinationResponse, MultiScenarioResponse, OptimizeRequest
@@ -30,7 +32,7 @@ def optimize_best_combination(body: OptimizeRequest) -> BestCombinationResponse:
         inverter_max_power_w=inverter_max_power_w,
     )
 
-    fallback_time = "12:00"
+    fallback_time = datetime.now().strftime("%H:%M")
     try:
         _, forecast_points = fetch_weather_and_forecast(body.city)
         current_time_hhmm = forecast_points[0].hour

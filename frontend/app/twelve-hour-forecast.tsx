@@ -10,17 +10,26 @@ import {
   DEFAULT_INVERTER_MAX_POWER_W,
   DEVICES_URL,
   ENERGY_LATEST_URL,
+  OPTIMIZE_BEST_URL,
   OPTIMIZE_URL,
   SOLAR_SYSTEM_URL,
 } from '@/lib/api-config';
 import { filterEnabledDevices, pruneDisabledDeviceIds } from '@/lib/device-enabled-store';
 import type { ApiDevice } from '@/lib/device-types';
 import {
+  getRunningPlanSelection,
+  subscribeFeasibleSelection,
+} from '@/lib/feasible-selection-store';
+import {
   buildDevicesCatalogSignature,
   buildRunnableCombinationCatalog,
   MAX_INVERTER_ENUM_DEVICES,
 } from '@/lib/optimization-catalog';
-import { buildMock12hForecast, type ForecastPoint } from '@/lib/plan-sustainability';
+import { buildMock12hForecast, computePlanSustainabilityHours, type ForecastPoint } from '@/lib/plan-sustainability';
+import {
+  type OrBestCombinationResponse,
+  resolveSelectedRunningPlan,
+} from '@/lib/running-plan';
 import {
   buildHourlySolarForecastRows,
   buildTwelveHourRunForecast,
@@ -49,6 +58,8 @@ export default function TwelveHourForecastScreen() {
   const [soc, setSoc] = useState<number | null>(null);
   const [forecastPoints, setForecastPoints] = useState<ForecastPoint[]>(() => buildMock12hForecast());
   const [lastUpdatedAt, setLastUpdatedAt] = useState<Date | null>(null);
+  const [runningPlanSelection, setRunningPlanSelection] = useState(() => getRunningPlanSelection());
+  const [orBestPlan, setOrBestPlan] = useState<OrBestCombinationResponse | null>(null);
 
   const [showAllPartial, setShowAllPartial] = useState(false);
   const [showAllRequiredOnly, setShowAllRequiredOnly] = useState(false);
@@ -86,10 +97,35 @@ export default function TwelveHourForecastScreen() {
     [allRunnableCombinations, availableEnergyWh, batteryCapacityWhValue, forecastPoints],
   );
 
-  const hourlySolarRows = useMemo(
-    () => buildHourlySolarForecastRows(forecastPoints, batteryCapacityWhValue),
-    [forecastPoints, batteryCapacityWhValue],
+  const selectedRunningPlan = useMemo(
+    () =>
+      resolveSelectedRunningPlan({
+        selection: runningPlanSelection,
+        allRunnableCombinations,
+        orBestPlan,
+        activeDevices,
+      }),
+    [runningPlanSelection, allRunnableCombinations, orBestPlan, activeDevices],
   );
+
+  const runningPlanSustainability = useMemo(() => {
+    if (!selectedRunningPlan || batteryCapacityWhValue <= 0) {
+      return null;
+    }
+    return computePlanSustainabilityHours({
+      totalPowerW: selectedRunningPlan.totalPowerW,
+      initialBatteryWh: availableEnergyWh,
+      batteryCapacityWh: batteryCapacityWhValue,
+      forecastPoints,
+    });
+  }, [selectedRunningPlan, batteryCapacityWhValue, availableEnergyWh, forecastPoints]);
+
+  const hourlySolarRows = useMemo(() => {
+    if (runningPlanSustainability) {
+      return runningPlanSustainability.hourlyBreakdown;
+    }
+    return buildHourlySolarForecastRows(forecastPoints, batteryCapacityWhValue, availableEnergyWh, 0);
+  }, [runningPlanSustainability, forecastPoints, batteryCapacityWhValue, availableEnergyWh]);
 
   const fullHorizonByCategory = useMemo(
     () => ({
@@ -104,9 +140,15 @@ export default function TwelveHourForecastScreen() {
 
   const forecastSignature = useMemo(
     () =>
-      `${buildDevicesCatalogSignature(activeDevices)}|${availableEnergyWh.toFixed(1)}|${batteryCapacityWhValue.toFixed(0)}|${forecastPoints.map((point) => `${point.hour}:${point.energy}`).join(',')}`,
-    [activeDevices, availableEnergyWh, batteryCapacityWhValue, forecastPoints],
+      `${buildDevicesCatalogSignature(activeDevices)}|${availableEnergyWh.toFixed(1)}|${batteryCapacityWhValue.toFixed(0)}|${runningPlanSelection?.kind ?? 'none'}|${runningPlanSelection?.kind === 'feasible' ? runningPlanSelection.combinationId : 'or'}|${forecastPoints.map((point) => `${point.hour}:${point.energy}`).join(',')}`,
+    [activeDevices, availableEnergyWh, batteryCapacityWhValue, runningPlanSelection, forecastPoints],
   );
+
+  useEffect(() => {
+    return subscribeFeasibleSelection(() => {
+      setRunningPlanSelection(getRunningPlanSelection());
+    });
+  }, []);
 
   useEffect(() => {
     setShowAllPartial(false);
@@ -114,6 +156,39 @@ export default function TwelveHourForecastScreen() {
     setShowAllOptionalOnly(false);
     setShowAllRequiredOptional(false);
   }, [forecastSignature]);
+
+  const fetchOrBestCombination = async (deviceList: ApiDevice[]) => {
+    if (deviceList.length === 0) {
+      setOrBestPlan(null);
+      return;
+    }
+    try {
+      const payload = {
+        city: targetCity,
+        devices: deviceList.map(({ name, power, duration, priority, essential, start_time, end_time }) => ({
+          name,
+          power,
+          duration,
+          priority,
+          essential,
+          start_time: start_time ?? '00:00',
+          end_time: end_time ?? '23:59',
+        })),
+      };
+      const res = await fetch(OPTIMIZE_BEST_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) {
+        setOrBestPlan(null);
+        return;
+      }
+      setOrBestPlan((await res.json()) as OrBestCombinationResponse);
+    } catch {
+      setOrBestPlan(null);
+    }
+  };
 
   const fetchForecastPoints = async (deviceList: ApiDevice[]) => {
     try {
@@ -183,7 +258,9 @@ export default function TwelveHourForecastScreen() {
         }
       }
 
-      await fetchForecastPoints(filterEnabledDevices(latestDevices));
+      const enabledDevices = filterEnabledDevices(latestDevices);
+      await fetchForecastPoints(enabledDevices);
+      await fetchOrBestCombination(enabledDevices);
       setLastUpdatedAt(new Date());
     } finally {
       if (showSpinner) {
@@ -209,7 +286,8 @@ export default function TwelveHourForecastScreen() {
           <ThemedView style={[styles.card, styles.forecastCard]}>
             <ThemedText type="subtitle">12-Hour Run Forecast</ThemedText>
             <ThemedText style={comboStyles.muted}>
-              Weather-based solar recharge for {targetCity}. Continuous load simulation without draining the battery.
+              Forward plan from the current hour for {twelveHourForecast.planningHorizonHours} hours. Night hours have
+              no solar recharge, so the battery may discharge only.
             </ThemedText>
             <ThemedText style={comboStyles.muted}>
               Available now: {availableEnergyWh.toFixed(1)} Wh · Battery capacity: {batteryCapacityWhValue.toFixed(0)} Wh
@@ -239,14 +317,42 @@ export default function TwelveHourForecastScreen() {
             ) : null}
 
             <ThemedText type="defaultSemiBold" style={comboStyles.sectionTitle}>
-              Hourly solar recharge (weather forecast)
+              Hourly battery forecast from now ({hourlySolarRows.length} hours)
             </ThemedText>
+            {selectedRunningPlan ? (
+              <>
+                <ThemedText style={comboStyles.muted}>
+                  Running now{selectedRunningPlan.source === 'or-tools' ? ' (OR-Tools)' : ''}:{' '}
+                  {selectedRunningPlan.summary}
+                </ThemedText>
+                <ThemedText style={comboStyles.muted}>
+                  Continuous load {selectedRunningPlan.totalPowerW.toFixed(0)} W · Starting battery{' '}
+                  {availableEnergyWh.toFixed(0)} / {batteryCapacityWhValue.toFixed(0)} Wh
+                </ThemedText>
+                {runningPlanSustainability ? (
+                  <ThemedText style={comboStyles.muted}>
+                    This plan can run {runningPlanSustainability.sustainableHours} of{' '}
+                    {runningPlanSustainability.planningHorizonHours} forecast hours without draining the battery.
+                  </ThemedText>
+                ) : null}
+              </>
+            ) : (
+              <ThemedText style={comboStyles.muted}>
+                No running plan selected. Select a plan on Feasible Combinations or OR-Tools Best Plan. Showing solar
+                recharge only (no device load).
+              </ThemedText>
+            )}
             {hourlySolarRows.length === 0 ? (
               <ThemedText style={comboStyles.muted}>No forecast points available.</ThemedText>
             ) : (
               hourlySolarRows.map((row) => (
                 <ThemedText key={`solar-${row.hour}`} style={comboStyles.muted}>
-                  {row.hour} · score {row.weatherEnergyScore.toFixed(1)} · +{row.solarRechargeWh.toFixed(0)} Wh
+                  {row.hour} ·{' '}
+                  {row.isDay
+                    ? `daylight · +${row.solarRechargeWh.toFixed(0)} Wh solar`
+                    : 'night · +0 Wh solar · discharge only'}
+                  {row.loadWh > 0 ? ` · load −${row.loadWh.toFixed(0)} Wh` : ''} · remaining{' '}
+                  {row.remainingBatteryWh.toFixed(0)} / {row.batteryCapacityWh.toFixed(0)} Wh
                 </ThemedText>
               ))
             )}

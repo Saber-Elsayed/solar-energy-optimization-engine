@@ -34,6 +34,7 @@ import {
   type ForecastPoint,
 } from '@/lib/plan-sustainability';
 import { buildTwelveHourRunForecast } from '@/lib/twelve-hour-run-forecast';
+import { type OrBestCombinationResponse, resolveSelectedRunningPlan } from '@/lib/running-plan';
 import { useEnabledDevices } from '@/lib/use-enabled-devices';
 
 type EnergyDataItem = {
@@ -292,60 +293,6 @@ type SolarSystemProfileResponse = {
   inverter_max_power_w: number;
 };
 
-type OrBestCombinationResponse = {
-  can_run: Array<{
-    name: string;
-    power: number;
-    duration: number;
-    priority: number;
-    essential: boolean;
-    start_time: string;
-    end_time: string;
-  }>;
-  total_power_w: number;
-  total_energy_wh: number;
-  remaining_energy_wh: number;
-  objective_score: number;
-  solver_status: string;
-};
-
-type SelectedRunningPlanView = {
-  source: 'feasible' | 'or-tools';
-  summary: string;
-  devices: ApiDevice[];
-  totalPowerW: number;
-  totalEnergyWh: number;
-};
-
-function mapOrPlanDevices(orPlan: OrBestCombinationResponse, devices: ApiDevice[]): ApiDevice[] {
-  return orPlan.can_run.map((orDevice) => {
-    const match = devices.find((device) => device.name === orDevice.name && device.power === orDevice.power);
-    if (match) {
-      return match;
-    }
-    return {
-      id: `or-${orDevice.name}-${orDevice.power}`,
-      name: orDevice.name,
-      power: orDevice.power,
-      duration: orDevice.duration,
-      priority: orDevice.priority,
-      essential: orDevice.essential,
-      start_time: orDevice.start_time,
-      end_time: orDevice.end_time,
-    };
-  });
-}
-
-function buildOrPlanSummary(devices: ApiDevice[]): string {
-  if (devices.length === 0) {
-    return 'No devices selected';
-  }
-  const names = devices.map((device) => device.name).join(' + ');
-  const totalPowerW = devices.reduce((sum, device) => sum + device.power, 0);
-  const totalEnergyWh = devices.reduce((sum, device) => sum + deviceEnergyWh(device), 0);
-  return `${names} · ${totalPowerW.toFixed(0)} W · ${totalEnergyWh.toFixed(0)} Wh energy`;
-}
-
 function optimizeDevices(
   devices: ApiDevice[],
   availableEnergyWh: number,
@@ -541,40 +488,16 @@ export default function HomeScreen() {
     ],
     [runnableCombinationCatalog],
   );
-  const selectedRunnableCombination = useMemo(() => {
-    if (runningPlanSelection?.kind !== 'feasible') {
-      return null;
-    }
-    return allRunnableCombinations.find((combo) => combo.id === runningPlanSelection.combinationId) ?? null;
-  }, [allRunnableCombinations, runningPlanSelection]);
-
-  const selectedRunningPlan = useMemo((): SelectedRunningPlanView | null => {
-    if (runningPlanSelection?.kind === 'feasible' && selectedRunnableCombination) {
-      return {
-        source: 'feasible',
-        summary: selectedRunnableCombination.summary,
-        devices: selectedRunnableCombination.devices,
-        totalPowerW: selectedRunnableCombination.totalPowerW,
-        totalEnergyWh: selectedRunnableCombination.totalEnergyWh,
-      };
-    }
-    if (
-      runningPlanSelection?.kind === 'or-tools' &&
-      orBestPlan &&
-      orBestPlan.can_run.length > 0 &&
-      (orBestPlan.solver_status === 'OPTIMAL' || orBestPlan.solver_status === 'FEASIBLE')
-    ) {
-      const orDevices = mapOrPlanDevices(orBestPlan, activeDevices);
-      return {
-        source: 'or-tools',
-        summary: buildOrPlanSummary(orDevices),
-        devices: orDevices,
-        totalPowerW: orBestPlan.total_power_w,
-        totalEnergyWh: orBestPlan.total_energy_wh,
-      };
-    }
-    return null;
-  }, [runningPlanSelection, selectedRunnableCombination, orBestPlan, activeDevices]);
+  const selectedRunningPlan = useMemo(
+    () =>
+      resolveSelectedRunningPlan({
+        selection: runningPlanSelection,
+        allRunnableCombinations,
+        orBestPlan,
+        activeDevices,
+      }),
+    [runningPlanSelection, allRunnableCombinations, orBestPlan, activeDevices],
+  );
 
   const selectedPlanSustainability = useMemo(() => {
     if (!selectedRunningPlan || batteryCapacityWhValue <= 0) {
@@ -1089,6 +1012,13 @@ export default function HomeScreen() {
                       <ThemedText style={styles.muted}>
                         Projected battery after horizon: {selectedPlanSustainability.finalBatteryWh.toFixed(0)} Wh
                       </ThemedText>
+                      {selectedPlanSustainability.hourlyBreakdown.map((row) => (
+                        <ThemedText key={`plan-hour-${row.hour}`} style={styles.muted}>
+                          {row.hour} · {row.isDay ? `+${row.solarRechargeWh.toFixed(0)} Wh solar` : 'night · +0 Wh solar'}{' '}
+                          · load −{row.loadWh.toFixed(0)} Wh · remaining {row.remainingBatteryWh.toFixed(0)} /{' '}
+                          {row.batteryCapacityWh.toFixed(0)} Wh
+                        </ThemedText>
+                      ))}
                     </ThemedView>
                   ) : null}
                   {selectedRunningPlan.devices.map((device) => (

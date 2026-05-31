@@ -50,10 +50,11 @@ class ScenarioResult(BaseModel):
 
 
 class ForecastPoint(BaseModel):
-    """Mock forecast input point for one hour."""
+    """One hour of forward solar forecast input."""
 
     hour: str = Field(..., pattern=r"^\d{2}:\d{2}$")
-    energy: float = Field(..., ge=0)
+    energy: float = Field(..., ge=0, description="Solar energy score for the hour (0 at night).")
+    is_day: bool = Field(default=True, description="False when the sun is down and no solar recharge is expected.")
 
 
 class ForecastHourResult(BaseModel):
