@@ -21,6 +21,13 @@ import {
   subscribeFeasibleSelection,
 } from '@/lib/feasible-selection-store';
 import {
+  getLastNightDarknessMinutes,
+  hydrateNightPlanStore,
+  isNightPlanDeviceEnabled,
+  isNightPlanModeActive,
+  subscribeNightPlanStore,
+} from '@/lib/night-plan-store';
+import {
   buildDevicesCatalogSignature,
   buildRunnableCombinationCatalog,
   MAX_INVERTER_ENUM_DEVICES,
@@ -60,6 +67,7 @@ export default function TwelveHourForecastScreen() {
   const [lastUpdatedAt, setLastUpdatedAt] = useState<Date | null>(null);
   const [runningPlanSelection, setRunningPlanSelection] = useState(() => getRunningPlanSelection());
   const [orBestPlan, setOrBestPlan] = useState<OrBestCombinationResponse | null>(null);
+  const [nightPlanUiRevision, setNightPlanUiRevision] = useState(0);
 
   const [showAllPartial, setShowAllPartial] = useState(false);
   const [showAllRequiredOnly, setShowAllRequiredOnly] = useState(false);
@@ -97,6 +105,15 @@ export default function TwelveHourForecastScreen() {
     [allRunnableCombinations, availableEnergyWh, batteryCapacityWhValue, forecastPoints],
   );
 
+  const nightDarknessMinutes = getLastNightDarknessMinutes();
+  const activeNightPlanDevices = useMemo(() => {
+    void nightPlanUiRevision;
+    if (!isNightPlanModeActive()) {
+      return [];
+    }
+    return devices.filter((device) => isNightPlanDeviceEnabled(device.id));
+  }, [devices, nightPlanUiRevision]);
+
   const selectedRunningPlan = useMemo(
     () =>
       resolveSelectedRunningPlan({
@@ -104,8 +121,18 @@ export default function TwelveHourForecastScreen() {
         allRunnableCombinations,
         orBestPlan,
         activeDevices,
+        nightPlanDevices: activeNightPlanDevices,
+        nightDarknessMinutes,
       }),
-    [runningPlanSelection, allRunnableCombinations, orBestPlan, activeDevices],
+    [
+      runningPlanSelection,
+      allRunnableCombinations,
+      orBestPlan,
+      activeDevices,
+      activeNightPlanDevices,
+      nightDarknessMinutes,
+      nightPlanUiRevision,
+    ],
   );
 
   const runningPlanSustainability = useMemo(() => {
@@ -146,6 +173,16 @@ export default function TwelveHourForecastScreen() {
 
   useEffect(() => {
     return subscribeFeasibleSelection(() => {
+      setRunningPlanSelection(getRunningPlanSelection());
+    });
+  }, []);
+
+  useEffect(() => {
+    void hydrateNightPlanStore().then(() => {
+      setRunningPlanSelection(getRunningPlanSelection());
+    });
+    return subscribeNightPlanStore(() => {
+      setNightPlanUiRevision((value) => value + 1);
       setRunningPlanSelection(getRunningPlanSelection());
     });
   }, []);
@@ -322,7 +359,13 @@ export default function TwelveHourForecastScreen() {
             {selectedRunningPlan ? (
               <>
                 <ThemedText style={comboStyles.muted}>
-                  Running now{selectedRunningPlan.source === 'or-tools' ? ' (OR-Tools)' : ''}:{' '}
+                  Running now
+                  {selectedRunningPlan.source === 'or-tools'
+                    ? ' (OR-Tools)'
+                    : selectedRunningPlan.source === 'night-plan'
+                      ? ' (Night plan)'
+                      : ''}
+                  :{' '}
                   {selectedRunningPlan.summary}
                 </ThemedText>
                 <ThemedText style={comboStyles.muted}>

@@ -21,6 +21,7 @@ export default function RootLayout() {
         <Stack.Screen name="constraint-combinations" options={{ title: 'Constraint Combinations' }} />
         <Stack.Screen name="devices-overview" options={{ title: 'Devices Overview' }} />
         <Stack.Screen name="feasible-combinations" options={{ title: 'Feasible Combinations' }} />
+        <Stack.Screen name="night-plan" options={{ title: 'Night Discharge Plan' }} />
         <Stack.Screen name="twelve-hour-forecast" options={{ title: '12-Hour Run Forecast' }} />
         <Stack.Screen name="modal" options={{ presentation: 'modal', title: 'Modal' }} />
       </Stack>

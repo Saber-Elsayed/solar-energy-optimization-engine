@@ -1,10 +1,15 @@
 import json
-from typing import List
+import logging
+from datetime import datetime
+from typing import List, Tuple
+from urllib.error import URLError
 from urllib.parse import quote
 from urllib.request import urlopen
 
+logger = logging.getLogger(__name__)
+
 from ..models.optimization import ForecastPoint, WeatherInfo
-from ..models.weather import CitySuggestion
+from ..models.weather import CitySuggestion, NightWindowResponse
 
 PLANNING_HORIZON_HOURS = 12
 
@@ -52,6 +57,139 @@ def cloud_to_condition(cloud_cover: float) -> str:
     if cloud_cover <= 60:
         return "Partly Cloudy"
     return "Cloudy"
+
+
+def _parse_weather_datetime(value: str) -> datetime:
+    """Parse Open-Meteo ISO timestamps; normalize to naive local time for comparisons."""
+    dt = datetime.fromisoformat(str(value))
+    if dt.tzinfo is not None:
+        return dt.replace(tzinfo=None)
+    return dt
+
+
+def _format_hhmm(dt: datetime) -> str:
+    return dt.strftime("%H:%M")
+
+
+def _night_window_from_daily(
+    *,
+    sunsets: List[str],
+    sunrises: List[str],
+    now: datetime,
+) -> Tuple[datetime, datetime, bool]:
+    """Return (sunset, next_sunrise, is_currently_dark) for the active or upcoming night."""
+    if len(sunsets) < 2 or len(sunrises) < 2:
+        raise ValueError("Weather API returned insufficient daily sun times.")
+
+    for index in range(len(sunsets) - 1):
+        sunset_dt = _parse_weather_datetime(sunsets[index])
+        sunrise_dt = _parse_weather_datetime(sunrises[index + 1])
+        if sunset_dt <= now < sunrise_dt:
+            return sunset_dt, sunrise_dt, True
+
+    for index in range(len(sunsets)):
+        sunset_dt = _parse_weather_datetime(sunsets[index])
+        if now < sunset_dt:
+            sunrise_dt = _parse_weather_datetime(sunrises[index + 1])
+            return sunset_dt, sunrise_dt, False
+
+    sunset_dt = _parse_weather_datetime(sunsets[-2])
+    sunrise_dt = _parse_weather_datetime(sunrises[-1])
+    return sunset_dt, sunrise_dt, now >= sunset_dt
+
+
+def _night_window_fallback(city: str) -> NightWindowResponse:
+    """Approximate night window when sunrise/sunset API data is unavailable."""
+    return NightWindowResponse(
+        city=city,
+        sunset="18:00",
+        sunrise="06:00",
+        darkness_minutes=12 * 60,
+        is_currently_dark=False,
+        discharge_only=True,
+        guidance=(
+            "Weather sun times are temporarily unavailable; using a 12-hour night estimate. "
+            "Discharge only — no solar charging until morning."
+        ),
+    )
+
+
+def _fetch_night_window_open_meteo(city: str) -> NightWindowResponse:
+    geocode_url = (
+        "https://geocoding-api.open-meteo.com/v1/search"
+        f"?name={quote(city)}&count=1&language=en&format=json"
+    )
+    with urlopen(geocode_url, timeout=10) as response:
+        geo_payload = json.loads(response.read().decode("utf-8"))
+    results = geo_payload.get("results") or []
+    if not results:
+        raise ValueError(f"City not found: {city}")
+
+    first = results[0]
+    latitude = first["latitude"]
+    longitude = first["longitude"]
+    resolved_city = first.get("name", city)
+
+    forecast_url = (
+        "https://api.open-meteo.com/v1/forecast"
+        f"?latitude={latitude}&longitude={longitude}"
+        "&current=is_day,cloud_cover"
+        "&daily=sunrise,sunset"
+        "&forecast_days=3"
+        "&timezone=auto"
+    )
+    with urlopen(forecast_url, timeout=10) as response:
+        weather_payload = json.loads(response.read().decode("utf-8"))
+
+    current = weather_payload.get("current", {})
+    current_time_iso = current.get("time")
+    now = _parse_weather_datetime(current_time_iso) if current_time_iso else datetime.now()
+
+    daily = weather_payload.get("daily", {})
+    sunsets = daily.get("sunset") or []
+    sunrises = daily.get("sunrise") or []
+    if not sunsets or not sunrises:
+        raise ValueError("Weather API returned no sunrise/sunset data.")
+
+    sunset_dt, sunrise_dt, is_currently_dark = _night_window_from_daily(
+        sunsets=sunsets,
+        sunrises=sunrises,
+        now=now,
+    )
+    darkness_minutes = max(0, int(round((sunrise_dt - sunset_dt).total_seconds() / 60)))
+
+    if is_currently_dark:
+        guidance = (
+            "Night mode: no solar charging until sunrise. Plan devices to run through darkness "
+            "using battery discharge only."
+        )
+    else:
+        guidance = (
+            "Upcoming night: no charging is expected after sunset until sunrise. "
+            "Select devices that can run for the full darkness period on battery alone."
+        )
+
+    return NightWindowResponse(
+        city=resolved_city,
+        sunset=_format_hhmm(sunset_dt),
+        sunrise=_format_hhmm(sunrise_dt),
+        darkness_minutes=darkness_minutes,
+        is_currently_dark=is_currently_dark,
+        discharge_only=True,
+        guidance=guidance,
+    )
+
+
+def fetch_night_window(city: str) -> NightWindowResponse:
+    """Resolve sunset→sunrise darkness for discharge-only night planning."""
+    try:
+        return _fetch_night_window_open_meteo(city)
+    except (ValueError, URLError, OSError, json.JSONDecodeError) as exc:
+        logger.warning("Night window fetch failed for %s: %s", city, exc)
+        return _night_window_fallback(city)
+    except Exception as exc:
+        logger.exception("Unexpected night window error for %s", city)
+        return _night_window_fallback(city)
 
 
 def _find_hourly_start_index(hourly_times: List[str], current_time_iso: str | None) -> int:

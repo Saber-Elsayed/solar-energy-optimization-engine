@@ -22,6 +22,16 @@ import {
   setOrToolsRunningPlan,
   subscribeFeasibleSelection,
 } from '@/lib/feasible-selection-store';
+import { deviceNightEnergyWh } from '@/lib/night-plan-catalog';
+import {
+  getLastNightDarknessMinutes,
+  getNightRunMinutes,
+  hydrateNightPlanStore,
+  isNightPlanDeviceEnabled,
+  isNightPlanModeActive,
+  isNightSetupComplete,
+  subscribeNightPlanStore,
+} from '@/lib/night-plan-store';
 import {
   buildDevicesCatalogSignature,
   buildRunnableCombinationCatalog,
@@ -461,6 +471,17 @@ export default function HomeScreen() {
   const [orBestPlan, setOrBestPlan] = useState<OrBestCombinationResponse | null>(null);
   const [orBestLoading, setOrBestLoading] = useState(false);
   const [orBestError, setOrBestError] = useState<string | null>(null);
+  const [nightPlanUiRevision, setNightPlanUiRevision] = useState(0);
+
+  const nightPlanCardHint = useMemo(() => {
+    if (!isNightSetupComplete()) {
+      return 'Set up home size and essential products · discharge only until sunrise';
+    }
+    if (isNightPlanModeActive()) {
+      return 'Night plan active · Tap to manage or exit to normal mode';
+    }
+    return 'Normal mode · Tap to enter night plan';
+  }, [nightPlanUiRevision]);
 
   const voltage = typeof battery?.voltage === 'number' ? battery.voltage : 0;
   const current = typeof battery?.current === 'number' ? battery.current : 0;
@@ -488,6 +509,14 @@ export default function HomeScreen() {
     ],
     [runnableCombinationCatalog],
   );
+  const nightDarknessMinutes = getLastNightDarknessMinutes();
+  const activeNightPlanDevices = useMemo(() => {
+    void nightPlanUiRevision;
+    if (!isNightPlanModeActive()) {
+      return [];
+    }
+    return devices.filter((device) => isNightPlanDeviceEnabled(device.id));
+  }, [devices, nightPlanUiRevision]);
   const selectedRunningPlan = useMemo(
     () =>
       resolveSelectedRunningPlan({
@@ -495,8 +524,18 @@ export default function HomeScreen() {
         allRunnableCombinations,
         orBestPlan,
         activeDevices,
+        nightPlanDevices: activeNightPlanDevices,
+        nightDarknessMinutes,
       }),
-    [runningPlanSelection, allRunnableCombinations, orBestPlan, activeDevices],
+    [
+      runningPlanSelection,
+      allRunnableCombinations,
+      orBestPlan,
+      activeDevices,
+      activeNightPlanDevices,
+      nightDarknessMinutes,
+      nightPlanUiRevision,
+    ],
   );
 
   const selectedPlanSustainability = useMemo(() => {
@@ -528,6 +567,16 @@ export default function HomeScreen() {
       setRunningPlanSelection(getRunningPlanSelection());
     }, []),
   );
+
+  useEffect(() => {
+    void hydrateNightPlanStore().then(() => {
+      setRunningPlanSelection(getRunningPlanSelection());
+    });
+    return subscribeNightPlanStore(() => {
+      setNightPlanUiRevision((value) => value + 1);
+      setRunningPlanSelection(getRunningPlanSelection());
+    });
+  }, []);
 
   useEffect(() => {
     return subscribeFeasibleSelection(() => {
@@ -903,6 +952,18 @@ export default function HomeScreen() {
             </Pressable>
 
             <Pressable
+              style={({ pressed }) => [styles.card, styles.nightCard, styles.columnCard, pressed && styles.buttonPressed]}
+              onPress={() =>
+                router.push({
+                  pathname: '/night-plan',
+                  params: { city: city.trim() || 'Tel Aviv' },
+                })
+              }>
+              <ThemedText type="subtitle">Night Discharge Plan</ThemedText>
+              <ThemedText style={styles.muted}>{nightPlanCardHint}</ThemedText>
+            </Pressable>
+
+            <Pressable
               style={({ pressed }) => [styles.card, styles.infoBlue, styles.columnCard, pressed && styles.buttonPressed]}
               onPress={() =>
                 router.push({
@@ -978,7 +1039,11 @@ export default function HomeScreen() {
               <>
                 <ThemedText type="defaultSemiBold" style={styles.selectedPlanTitle}>
                   Selected Running Plan
-                  {selectedRunningPlan.source === 'or-tools' ? ' (OR-Tools)' : ''}
+                  {selectedRunningPlan.source === 'or-tools'
+                    ? ' (OR-Tools)'
+                    : selectedRunningPlan.source === 'night-plan'
+                      ? ' (Night plan)'
+                      : ''}
                 </ThemedText>
                 <ThemedView style={styles.selectedPlanCard}>
                   <ThemedText>{selectedRunningPlan.summary}</ThemedText>
@@ -1021,17 +1086,28 @@ export default function HomeScreen() {
                       ))}
                     </ThemedView>
                   ) : null}
-                  {selectedRunningPlan.devices.map((device) => (
-                    <ThemedText key={`selected-${device.id}`}>
-                      - {device.name} ({device.essential ? 'Required' : 'Optional'}) · {device.power} W ·{' '}
-                      {device.duration} min · {deviceEnergyWh(device).toFixed(0)} Wh
-                    </ThemedText>
-                  ))}
+                  {selectedRunningPlan.devices.map((device) => {
+                    const energyWh =
+                      selectedRunningPlan.source === 'night-plan'
+                        ? deviceNightEnergyWh(
+                            device.power,
+                            getNightRunMinutes(device.id, nightDarknessMinutes),
+                          )
+                        : deviceEnergyWh(device);
+                    return (
+                      <ThemedText key={`selected-${device.id}`}>
+                        - {device.name} ({device.essential ? 'Required' : 'Optional'}) · {device.power} W ·{' '}
+                        {device.duration} min · {energyWh.toFixed(0)} Wh
+                      </ThemedText>
+                    );
+                  })}
                 </ThemedView>
               </>
             ) : (
               <ThemedText style={styles.muted}>
-                Select a plan on Feasible Combinations or choose the OR-Tools best plan above.
+                {isNightPlanModeActive()
+                  ? 'Turn on products in Night Discharge Plan, or select a plan on Feasible Combinations / OR-Tools.'
+                  : 'Select a plan on Feasible Combinations, choose the OR-Tools best plan, or enter Night Discharge Plan.'}
               </ThemedText>
             )}
 
@@ -1163,6 +1239,10 @@ const styles = StyleSheet.create({
   infoBlue: {
     borderColor: '#9ec5f8',
     backgroundColor: '#eef5ff',
+  },
+  nightCard: {
+    borderColor: '#8a9ab8',
+    backgroundColor: '#eef1f7',
   },
   safeGreen: {
     borderColor: '#9ad3a6',
