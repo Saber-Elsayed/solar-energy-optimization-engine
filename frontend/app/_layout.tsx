@@ -14,7 +14,7 @@ export const unstable_settings = {
 
 function RootNavigator() {
   const colorScheme = useColorScheme();
-  const { user, loading, isEmailVerified } = useAuth();
+  const { user, loading, isEmailVerified, isApproved, isAdmin } = useAuth();
   const segments = useSegments();
   const router = useRouter();
 
@@ -27,7 +27,9 @@ function RootNavigator() {
     const inLogin = authRoute === 'login';
     const inRegister = authRoute === 'register';
     const inVerifyEmail = authRoute === 'verify-email';
-    const inAuthScreen = inLogin || inRegister || inVerifyEmail;
+    const inPendingApproval = authRoute === 'pending-approval';
+    const inAdminApprovals = authRoute === 'admin-approvals';
+    const inAuthScreen = inLogin || inRegister || inVerifyEmail || inPendingApproval || inAdminApprovals;
 
     if (!user && !inAuthScreen) {
       router.replace('/login');
@@ -39,10 +41,37 @@ function RootNavigator() {
       return;
     }
 
-    if (user && isEmailVerified && (inLogin || inRegister || inVerifyEmail)) {
-      router.replace('/(tabs)');
+    // Admins skip user approval flow and go straight to approvals screen.
+    if (user && isEmailVerified && isAdmin && !inAdminApprovals) {
+      router.replace('/admin-approvals');
+      return;
     }
-  }, [user, loading, isEmailVerified, segments, router]);
+
+    if (user && isEmailVerified && !isAdmin && isApproved === false && !inPendingApproval) {
+      router.replace('/pending-approval');
+      return;
+    }
+
+    if (
+      user &&
+      isEmailVerified &&
+      isApproved &&
+      !isAdmin &&
+      (inLogin || inRegister || inVerifyEmail || inPendingApproval)
+    ) {
+      router.replace('/(tabs)');
+      return;
+    }
+
+    if (user && isEmailVerified && isAdmin && (inLogin || inRegister || inVerifyEmail || inPendingApproval)) {
+      router.replace('/admin-approvals');
+      return;
+    }
+
+    if (user && isEmailVerified && inAdminApprovals && !isAdmin) {
+      router.replace(isApproved ? '/(tabs)' : '/pending-approval');
+    }
+  }, [user, loading, isEmailVerified, isApproved, isAdmin, segments, router]);
 
   if (loading) {
     return (
@@ -59,6 +88,8 @@ function RootNavigator() {
         <Stack.Screen name="login" options={{ headerShown: false }} />
         <Stack.Screen name="register" options={{ headerShown: false }} />
         <Stack.Screen name="verify-email" options={{ headerShown: false }} />
+        <Stack.Screen name="pending-approval" options={{ headerShown: false }} />
+        <Stack.Screen name="admin-approvals" options={{ headerShown: false }} />
         <Stack.Screen name="manage-devices" options={{ title: 'Manage Electrical Devices' }} />
         <Stack.Screen name="solar-system-settings" options={{ title: 'Solar System Settings' }} />
         <Stack.Screen name="constraint-combinations" options={{ title: 'Constraint Combinations' }} />

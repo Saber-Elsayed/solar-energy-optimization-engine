@@ -8,10 +8,11 @@ import { getFirebaseAuthErrorMessage } from '@/lib/firebase-auth-errors';
 
 export default function LoginScreen() {
   const router = useRouter();
-  const { signIn } = useAuth();
+  const { signIn, isAdmin } = useAuth();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
+  const [adminMode, setAdminMode] = useState(false);
 
   const handleLogin = async () => {
     if (!email.trim() || !password) {
@@ -21,7 +22,13 @@ export default function LoginScreen() {
     setLoading(true);
     try {
       await signIn(email.trim(), password);
-      // Route guard sends unverified users to /verify-email.
+      // Route guard sends unverified users to /verify-email and non-approved users to /pending-approval.
+      // If this is an admin login, we navigate to the approvals screen (guard will also enforce admin role).
+      if (adminMode) {
+        router.replace('/admin-approvals');
+      } else if (isAdmin) {
+        router.replace('/admin-approvals');
+      }
     } catch (err) {
       Alert.alert('Login failed', getFirebaseAuthErrorMessage(err, 'Unable to sign in.'));
     } finally {
@@ -54,7 +61,10 @@ export default function LoginScreen() {
           autoComplete="password"
         />
         <Pressable style={styles.button} onPress={handleLogin} disabled={loading}>
-          <Text style={styles.buttonText}>{loading ? 'Logging in...' : 'Login'}</Text>
+          <Text style={styles.buttonText}>{loading ? 'Logging in...' : adminMode ? 'Login as admin' : 'Login'}</Text>
+        </Pressable>
+        <Pressable style={styles.secondaryButton} onPress={() => setAdminMode((value) => !value)} disabled={loading}>
+          <Text style={styles.secondaryButtonText}>{adminMode ? 'User login' : 'Admin login'}</Text>
         </Pressable>
         <Pressable onPress={() => router.push('/register')}>
           <Text style={styles.link}>No account? Register</Text>
@@ -82,5 +92,14 @@ const styles = StyleSheet.create({
   },
   button: { backgroundColor: '#0a7ea4', borderRadius: 8, paddingVertical: 12, alignItems: 'center' },
   buttonText: { color: '#fff', fontSize: 16, fontWeight: '600' },
+  secondaryButton: {
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#0a7ea4',
+    borderRadius: 8,
+    alignItems: 'center',
+    paddingVertical: 12,
+    backgroundColor: '#fff',
+  },
+  secondaryButtonText: { color: '#0a7ea4', fontSize: 16, fontWeight: '600' },
   link: { marginTop: 8, color: '#0a7ea4', textAlign: 'center' },
 });

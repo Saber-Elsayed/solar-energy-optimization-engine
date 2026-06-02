@@ -1,5 +1,5 @@
 import { useRouter } from 'expo-router';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -8,17 +8,25 @@ import { getFirebaseAuthErrorMessage } from '@/lib/firebase-auth-errors';
 
 export default function VerifyEmailScreen() {
   const router = useRouter();
-  const { user, logout, resendVerificationEmail, refreshUser } = useAuth();
+  const { user, logout, resendVerificationEmail, completeEmailVerification } = useAuth();
   const [resending, setResending] = useState(false);
   const [checking, setChecking] = useState(false);
+  const [cooldownSeconds, setCooldownSeconds] = useState(0);
 
   const email = user?.email ?? '';
 
   const handleResend = async () => {
+    if (cooldownSeconds > 0) {
+      return;
+    }
     setResending(true);
     try {
       await resendVerificationEmail();
-      Alert.alert('Email sent', 'A new verification link was sent to your email.');
+      setCooldownSeconds(60);
+      Alert.alert(
+        'Email sent',
+        'Check your inbox and spam folder. It can take 1–2 minutes. If nothing arrives, wait and use Resend again.',
+      );
     } catch (err) {
       Alert.alert('Could not resend', getFirebaseAuthErrorMessage(err, 'Unable to resend verification email.'));
     } finally {
@@ -26,17 +34,31 @@ export default function VerifyEmailScreen() {
     }
   };
 
+  useEffect(() => {
+    if (cooldownSeconds <= 0) {
+      return;
+    }
+    const timer = setInterval(() => {
+      setCooldownSeconds((value) => (value <= 1 ? 0 : value - 1));
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [cooldownSeconds]);
+
   const handleCheckVerified = async () => {
     setChecking(true);
     try {
-      const verified = await refreshUser();
-      if (verified) {
-        router.replace('/(tabs)');
+      const verified = await completeEmailVerification();
+      if (!verified) {
+        Alert.alert(
+          'Not verified yet',
+          'Please open the verification link in your email, then tap "I verified my email" again.',
+        );
         return;
       }
+      router.replace('/login');
       Alert.alert(
-        'Not verified yet',
-        'Please open the verification link in your email, then tap "I verified my email" again.',
+        'Email verified',
+        'Please sign in with your email and password. Your account will wait for admin approval.',
       );
     } catch (err) {
       Alert.alert('Check failed', getFirebaseAuthErrorMessage(err, 'Unable to refresh verification status.'));
@@ -48,8 +70,7 @@ export default function VerifyEmailScreen() {
   const handleLogout = async () => {
     try {
       await logout();
-      router.replace('/login');
-    } catch {
+    } finally {
       router.replace('/login');
     }
   };
@@ -58,15 +79,15 @@ export default function VerifyEmailScreen() {
     <SafeAreaView style={styles.safe}>
       <View style={styles.container}>
         <Text style={styles.title}>Verify your email</Text>
-        <Text style={styles.message}>
-          We sent a verification link to:
-        </Text>
+        <Text style={styles.message}>We sent a verification link to:</Text>
         <Text style={styles.email}>{email || 'your email address'}</Text>
         <Text style={styles.hint}>
-          Open the link in your inbox to activate your account. You cannot use the app until your email is verified.
+          After you verify, tap the button below. You will return to Login, then sign in again while your account
+          waits for admin approval.
         </Text>
+        <Text style={styles.hint}>Check spam/junk if you do not see the email within a few minutes.</Text>
 
-        <Pressable style={styles.button} onPress={handleCheckVerified} disabled={checking || resending}>
+        <Pressable style={styles.button} onPress={() => void handleCheckVerified()} disabled={checking || resending}>
           {checking ? (
             <ActivityIndicator color="#fff" />
           ) : (
@@ -74,9 +95,16 @@ export default function VerifyEmailScreen() {
           )}
         </Pressable>
 
-        <Pressable style={styles.secondaryButton} onPress={() => void handleResend()} disabled={resending || checking}>
+        <Pressable
+          style={styles.secondaryButton}
+          onPress={() => void handleResend()}
+          disabled={resending || checking || cooldownSeconds > 0}>
           <Text style={styles.secondaryButtonText}>
-            {resending ? 'Sending...' : 'Resend verification email'}
+            {resending
+              ? 'Sending...'
+              : cooldownSeconds > 0
+                ? `Resend available in ${cooldownSeconds}s`
+                : 'Resend verification email'}
           </Text>
         </Pressable>
 

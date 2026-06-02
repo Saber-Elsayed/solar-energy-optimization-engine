@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Solar Optimizer — Admin</title>
+    <style>
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+        margin: 0;
+        background: #f4f7fb;
+        color: #0f172a;
+      }
+      .wrap {
+        max-width: 960px;
+        margin: 0 auto;
+        padding: 24px;
+      }
+      h1 {
+        margin: 0 0 8px;
+        font-size: 1.6rem;
+      }
+      .muted {
+        color: #64748b;
+        margin-bottom: 20px;
+      }
+      .card {
+        background: #fff;
+        border: 1px solid #dbe3ee;
+        border-radius: 12px;
+        padding: 16px;
+        margin-bottom: 16px;
+      }
+      label {
+        display: block;
+        font-size: 0.9rem;
+        margin-bottom: 6px;
+      }
+      input {
+        width: 100%;
+        padding: 10px 12px;
+        border: 1px solid #cbd5e1;
+        border-radius: 8px;
+        margin-bottom: 10px;
+      }
+      button {
+        border: none;
+        border-radius: 8px;
+        padding: 10px 14px;
+        font-weight: 600;
+        cursor: pointer;
+      }
+      .primary {
+        background: #0a7ea4;
+        color: #fff;
+      }
+      .secondary {
+        background: #e2e8f0;
+        color: #0f172a;
+      }
+      .approve {
+        background: #15803d;
+        color: #fff;
+      }
+      .reject {
+        background: #b91c1c;
+        color: #fff;
+      }
+      .row {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        align-items: center;
+      }
+      .error {
+        color: #b91c1c;
+        margin-top: 8px;
+      }
+      .success {
+        color: #15803d;
+        margin-top: 8px;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+      }
+      th,
+      td {
+        text-align: left;
+        padding: 10px 8px;
+        border-bottom: 1px solid #e2e8f0;
+        vertical-align: top;
+      }
+      th {
+        font-size: 0.85rem;
+        color: #475569;
+      }
+      .hidden {
+        display: none;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <h1>Admin Panel</h1>
+      <p class="muted">Approve or reject new user registrations.</p>
+
+      <section id="login-section" class="card">
+        <h2>Admin sign in</h2>
+        <label for="email">Email</label>
+        <input id="email" type="email" autocomplete="email" />
+        <label for="password">Password</label>
+        <input id="password" type="password" autocomplete="current-password" />
+        <div class="row">
+          <button class="primary" id="login-btn" type="button">Sign in</button>
+        </div>
+        <p id="login-message" class="error hidden"></p>
+      </section>
+
+      <section id="admin-section" class="hidden">
+        <div class="card">
+          <div class="row">
+            <p id="admin-email" class="muted" style="margin: 0; flex: 1"></p>
+            <button class="secondary" id="bootstrap-btn" type="button">Grant admin access</button>
+            <button class="secondary" id="refresh-btn" type="button">Refresh list</button>
+            <button class="secondary" id="logout-btn" type="button">Sign out</button>
+          </div>
+          <p id="admin-message" class="hidden"></p>
+        </div>
+
+        <div class="card">
+          <h2>Pending registrations</h2>
+          <table>
+            <thead>
+              <tr>
+                <th>Email</th>
+                <th>Requested</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="pending-body"></tbody>
+          </table>
+          <p id="empty-message" class="muted hidden">No pending registrations.</p>
+        </div>
+      </section>
+    </div>
+
+    <script type="module">
+      import { initializeApp } from 'https://www.gstatic.com/firebasejs/11.6.0/firebase-app.js';
+      import {
+        getAuth,
+        onAuthStateChanged,
+        signInWithEmailAndPassword,
+        signOut,
+      } from 'https://www.gstatic.com/firebasejs/11.6.0/firebase-auth.js';
+
+      const firebaseConfig = {
+        apiKey: 'AIzaSyDvqrOEPkDfen5o1M8whEuSfO9ixmCC6UU',
+        authDomain: 'solar-energy-optimizer.firebaseapp.com',
+        projectId: 'solar-energy-optimizer',
+        storageBucket: 'solar-energy-optimizer.firebasestorage.app',
+        messagingSenderId: '1039248907467',
+        appId: '1:1039248907467:web:a6addb42d299eb694c0f4e',
+        measurementId: 'G-K7T2DJTH86',
+      };
+
+      const app = initializeApp(firebaseConfig);
+      const auth = getAuth(app);
+      const apiBase = window.location.origin;
+
+      const loginSection = document.getElementById('login-section');
+      const adminSection = document.getElementById('admin-section');
+      const loginMessage = document.getElementById('login-message');
+      const adminMessage = document.getElementById('admin-message');
+      const pendingBody = document.getElementById('pending-body');
+      const emptyMessage = document.getElementById('empty-message');
+
+      function showMessage(el, text, isError = true) {
+        el.textContent = text;
+        el.classList.remove('hidden');
+        el.classList.toggle('error', isError);
+        el.classList.toggle('success', !isError);
+      }
+
+      function hideMessage(el) {
+        el.classList.add('hidden');
+      }
+
+      async function apiFetch(path, options = {}) {
+        const user = auth.currentUser;
+        if (!user) {
+          throw new Error('Not signed in');
+        }
+        const token = await user.getIdToken();
+        const response = await fetch(`${apiBase}${path}`, {
+          ...options,
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+            ...(options.headers || {}),
+          },
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          throw new Error(payload.detail || `Request failed (${response.status})`);
+        }
+        return payload;
+      }
+
+      async function loadPending() {
+        const rows = await apiFetch('/admin/registrations?status=pending');
+        pendingBody.innerHTML = '';
+        if (!rows.length) {
+          emptyMessage.classList.remove('hidden');
+          return;
+        }
+        emptyMessage.classList.add('hidden');
+        for (const row of rows) {
+          const tr = document.createElement('tr');
+          const created = new Date(row.created_at).toLocaleString();
+          tr.innerHTML = `
+            <td>${row.email}</td>
+            <td>${created}</td>
+            <td class="row"></td>
+          `;
+          const actions = tr.querySelector('td.row');
+          const approveBtn = document.createElement('button');
+          approveBtn.className = 'approve';
+          approveBtn.textContent = 'Approve';
+          approveBtn.onclick = async () => {
+            try {
+              await apiFetch(`/admin/registrations/${row.firebase_uid}/approve`, { method: 'POST' });
+              await loadPending();
+              showMessage(adminMessage, `Approved ${row.email}`, false);
+            } catch (err) {
+              showMessage(adminMessage, err.message, true);
+            }
+          };
+          const rejectBtn = document.createElement('button');
+          rejectBtn.className = 'reject';
+          rejectBtn.textContent = 'Reject';
+          rejectBtn.onclick = async () => {
+            const reason = window.prompt('Rejection reason (optional):') || null;
+            try {
+              await apiFetch(`/admin/registrations/${row.firebase_uid}/reject`, {
+                method: 'POST',
+                body: JSON.stringify({ reason }),
+              });
+              await loadPending();
+              showMessage(adminMessage, `Rejected ${row.email}`, false);
+            } catch (err) {
+              showMessage(adminMessage, err.message, true);
+            }
+          };
+          actions.append(approveBtn, rejectBtn);
+          pendingBody.appendChild(tr);
+        }
+      }
+
+      document.getElementById('login-btn').onclick = async () => {
+        hideMessage(loginMessage);
+        try {
+          await signInWithEmailAndPassword(
+            auth,
+            document.getElementById('email').value.trim(),
+            document.getElementById('password').value,
+          );
+        } catch (err) {
+          showMessage(loginMessage, err.message || 'Sign in failed');
+        }
+      };
+
+      document.getElementById('logout-btn').onclick = async () => {
+        await signOut(auth);
+      };
+
+      document.getElementById('refresh-btn').onclick = () => {
+        void loadPending();
+      };
+
+      document.getElementById('bootstrap-btn').onclick = async () => {
+        try {
+          const result = await apiFetch('/firebase/registration/bootstrap-admin', { method: 'POST' });
+          showMessage(adminMessage, result.message, false);
+        } catch (err) {
+          showMessage(adminMessage, err.message, true);
+        }
+      };
+
+      onAuthStateChanged(auth, async (user) => {
+        if (!user) {
+          loginSection.classList.remove('hidden');
+          adminSection.classList.add('hidden');
+          return;
+        }
+        loginSection.classList.add('hidden');
+        adminSection.classList.remove('hidden');
+        document.getElementById('admin-email').textContent = `Signed in as ${user.email}`;
+        try {
+          await loadPending();
+          hideMessage(adminMessage);
+        } catch (err) {
+          showMessage(
+            adminMessage,
+            `${err.message}. If this is your first login, click "Grant admin access", sign out, and sign in again.`,
+            true,
+          );
+        }
+      });
+    </script>
+  </body>
+</html>

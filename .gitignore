@@ -26,6 +26,7 @@ venv/
 ENV/
 env/
 
+
 .mypy_cache/
 .pytest_cache/
 .ruff_cache/
@@ -39,3 +40,9 @@ htmlcov/
 
 .DS_Store
 Thumbs.db
+
+# Secrets — never commit
+backend/.env
+frontend/.env
+*-firebase-adminsdk-*.json
+**/firebase-service-account.json
