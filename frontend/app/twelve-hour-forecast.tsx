@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, ScrollView, StyleSheet } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { ActivityIndicator, View } from 'react-native';
 import { useLocalSearchParams } from 'expo-router';
 
 import { TwelveHourRunComboList, comboStyles } from '@/components/combination-catalog-ui';
+import { OnBgScreen } from '@/components/on-bg-screen';
 import { ThemedText } from '@/components/themed-text';
-import { ThemedView } from '@/components/themed-view';
+import { onBgStyles } from '@/styles/on-bg';
 import {
   DEFAULT_INVERTER_MAX_POWER_W,
   DEVICES_URL,
@@ -315,50 +315,51 @@ export default function TwelveHourForecastScreen() {
   }, [targetCity]);
 
   return (
-    <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
-      <ScrollView contentContainerStyle={styles.content}>
-        {loading ? (
-          <ActivityIndicator size="large" color="#0a7ea4" />
-        ) : (
-          <ThemedView style={[styles.card, styles.forecastCard]}>
-            <ThemedText type="subtitle">12-Hour Run Forecast</ThemedText>
-            <ThemedText style={comboStyles.muted}>
+    <OnBgScreen>
+      {loading ? (
+        <ActivityIndicator size="large" color="#ffffff" />
+      ) : (
+        <View style={onBgStyles.onBgPanel}>
+          <ThemedText type="subtitle" lightColor="#fff" style={onBgStyles.onBgTitle}>
+            12-Hour Run Forecast
+          </ThemedText>
+          <ThemedText lightColor="#fff" style={comboStyles.muted}>
               Forward plan from the current hour for {twelveHourForecast.planningHorizonHours} hours. Night hours have
               no solar recharge, so the battery may discharge only.
             </ThemedText>
-            <ThemedText style={comboStyles.muted}>
+            <ThemedText lightColor="#fff" style={comboStyles.muted}>
               Available now: {availableEnergyWh.toFixed(1)} Wh · Battery capacity: {batteryCapacityWhValue.toFixed(0)} Wh
               {soc !== null ? ` · SOC ${soc.toFixed(0)}%` : ''}
             </ThemedText>
             {lastUpdatedAt ? (
-              <ThemedText style={comboStyles.muted}>
+              <ThemedText lightColor="#fff" style={comboStyles.muted}>
                 Updated {lastUpdatedAt.toLocaleTimeString()} · refreshes every {POLL_INTERVAL_MS / 1000}s
               </ThemedText>
             ) : null}
 
             {batteryCapacityWhValue <= 0 ? (
-              <ThemedText style={comboStyles.muted}>
+              <ThemedText lightColor="#fff" style={comboStyles.muted}>
                 Configure battery capacity in Solar System Settings to compute the forecast.
               </ThemedText>
             ) : null}
 
             {activeDevices.length === 0 ? (
-              <ThemedText style={comboStyles.muted}>No active devices. Enable products in Devices Overview.</ThemedText>
+              <ThemedText lightColor="#fff" style={comboStyles.muted}>No active devices. Enable products in Devices Overview.</ThemedText>
             ) : null}
 
             {activeDevices.length > MAX_INVERTER_ENUM_DEVICES ? (
-              <ThemedText style={comboStyles.muted}>
+              <ThemedText lightColor="#fff" style={comboStyles.muted}>
                 Too many active devices ({activeDevices.length}). Reduce to {MAX_INVERTER_ENUM_DEVICES} or fewer for full
                 combination forecast.
               </ThemedText>
             ) : null}
 
-            <ThemedText type="defaultSemiBold" style={comboStyles.sectionTitle}>
+            <ThemedText type="defaultSemiBold" lightColor="#fff" style={comboStyles.sectionTitle}>
               Hourly battery forecast from now ({hourlySolarRows.length} hours)
             </ThemedText>
             {selectedRunningPlan ? (
               <>
-                <ThemedText style={comboStyles.muted}>
+                <ThemedText lightColor="#fff" style={comboStyles.muted}>
                   Running now
                   {selectedRunningPlan.source === 'or-tools'
                     ? ' (OR-Tools)'
@@ -368,25 +369,25 @@ export default function TwelveHourForecastScreen() {
                   :{' '}
                   {selectedRunningPlan.summary}
                 </ThemedText>
-                <ThemedText style={comboStyles.muted}>
+                <ThemedText lightColor="#fff" style={comboStyles.muted}>
                   Continuous load {selectedRunningPlan.totalPowerW.toFixed(0)} W · Starting battery{' '}
                   {availableEnergyWh.toFixed(0)} / {batteryCapacityWhValue.toFixed(0)} Wh
                 </ThemedText>
                 {runningPlanSustainability ? (
-                  <ThemedText style={comboStyles.muted}>
+                  <ThemedText lightColor="#fff" style={comboStyles.muted}>
                     This plan can run {runningPlanSustainability.sustainableHours} of{' '}
                     {runningPlanSustainability.planningHorizonHours} forecast hours without draining the battery.
                   </ThemedText>
                 ) : null}
               </>
             ) : (
-              <ThemedText style={comboStyles.muted}>
+              <ThemedText lightColor="#fff" style={comboStyles.muted}>
                 No running plan selected. Select a plan on Feasible Combinations or OR-Tools Best Plan. Showing solar
                 recharge only (no device load).
               </ThemedText>
             )}
             {hourlySolarRows.length === 0 ? (
-              <ThemedText style={comboStyles.muted}>No forecast points available.</ThemedText>
+              <ThemedText lightColor="#fff" style={comboStyles.muted}>No forecast points available.</ThemedText>
             ) : (
               hourlySolarRows.map((row) => (
                 <ThemedText key={`solar-${row.hour}`} style={comboStyles.muted}>
@@ -400,11 +401,11 @@ export default function TwelveHourForecastScreen() {
               ))
             )}
 
-            <ThemedText type="defaultSemiBold" style={comboStyles.sectionTitle}>
+            <ThemedText type="defaultSemiBold" lightColor="#fff" style={comboStyles.sectionTitle}>
               Can run all {twelveHourForecast.planningHorizonHours} hours ({twelveHourForecast.fullHorizonPlans.length})
             </ThemedText>
             {twelveHourForecast.fullHorizonPlans.length === 0 ? (
-              <ThemedText style={comboStyles.muted}>
+              <ThemedText lightColor="#fff" style={comboStyles.muted}>
                 No active product combination can run the full {twelveHourForecast.planningHorizonHours}-hour horizon with
                 current battery and weather forecast.
               </ThemedText>
@@ -412,7 +413,9 @@ export default function TwelveHourForecastScreen() {
               <>
                 {fullHorizonByCategory.essentialOnly.length > 0 ? (
                   <>
-                    <ThemedText type="defaultSemiBold">Required only</ThemedText>
+                    <ThemedText type="defaultSemiBold" lightColor="#fff" style={onBgStyles.onBgHeading}>
+                      Required only
+                    </ThemedText>
                     <TwelveHourRunComboList
                       plans={fullHorizonByCategory.essentialOnly}
                       planningHorizonHours={twelveHourForecast.planningHorizonHours}
@@ -424,7 +427,9 @@ export default function TwelveHourForecastScreen() {
 
                 {fullHorizonByCategory.optionalOnly.length > 0 ? (
                   <>
-                    <ThemedText type="defaultSemiBold">Optional only</ThemedText>
+                    <ThemedText type="defaultSemiBold" lightColor="#fff" style={onBgStyles.onBgHeading}>
+                      Optional only
+                    </ThemedText>
                     <TwelveHourRunComboList
                       plans={fullHorizonByCategory.optionalOnly}
                       planningHorizonHours={twelveHourForecast.planningHorizonHours}
@@ -436,7 +441,9 @@ export default function TwelveHourForecastScreen() {
 
                 {fullHorizonByCategory.essentialWithOptional.length > 0 ? (
                   <>
-                    <ThemedText type="defaultSemiBold">Required + Optional</ThemedText>
+                    <ThemedText type="defaultSemiBold" lightColor="#fff" style={onBgStyles.onBgHeading}>
+                      Required + Optional
+                    </ThemedText>
                     <TwelveHourRunComboList
                       plans={fullHorizonByCategory.essentialWithOptional}
                       planningHorizonHours={twelveHourForecast.planningHorizonHours}
@@ -450,10 +457,10 @@ export default function TwelveHourForecastScreen() {
 
             {twelveHourForecast.partialPlans.length > 0 ? (
               <>
-                <ThemedText type="defaultSemiBold" style={comboStyles.sectionTitle}>
+                <ThemedText type="defaultSemiBold" lightColor="#fff" style={comboStyles.sectionTitle}>
                   Partial coverage ({twelveHourForecast.partialPlans.length})
                 </ThemedText>
-                <ThemedText style={comboStyles.muted}>
+                <ThemedText lightColor="#fff" style={comboStyles.muted}>
                   These plans fit now but do not cover the full {twelveHourForecast.planningHorizonHours}-hour horizon.
                 </ThemedText>
                 <TwelveHourRunComboList
@@ -464,26 +471,8 @@ export default function TwelveHourForecastScreen() {
                 />
               </>
             ) : null}
-          </ThemedView>
-        )}
-      </ScrollView>
-    </SafeAreaView>
+        </View>
+      )}
+    </OnBgScreen>
   );
 }
-
-const styles = StyleSheet.create({
-  safe: { flex: 1 },
-  content: { padding: 16, paddingBottom: 28 },
-  card: {
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#d7deea',
-    borderRadius: 12,
-    backgroundColor: '#f8fbff',
-    padding: 14,
-    gap: 10,
-  },
-  forecastCard: {
-    borderColor: '#9ec5f8',
-    backgroundColor: '#f0f6ff',
-  },
-});

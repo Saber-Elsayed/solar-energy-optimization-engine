@@ -11,9 +11,9 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
-
+import { OnBgScreen } from '@/components/on-bg-screen';
 import { comboStyles } from '@/components/combination-catalog-ui';
+import { onBgStyles } from '@/styles/on-bg';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import {
@@ -514,74 +514,87 @@ export default function NightPlanScreen() {
   const showSuggestionsStep = showWizard && homeSqm && suggestionBundle;
 
   return (
-    <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
-      <ScrollView contentContainerStyle={styles.content}>
-        {loading ? (
-          <ActivityIndicator size="large" color="#0a7ea4" />
-        ) : loadError ? (
-          <ThemedView style={[styles.card, styles.nightBanner]}>
-            <ThemedText type="subtitle">Night discharge plan</ThemedText>
-            <ThemedText style={styles.warnText}>{loadError}</ThemedText>
-          </ThemedView>
-        ) : (
-          <>
-            <ThemedView style={[styles.card, styles.nightBanner]}>
-              <ThemedText type="subtitle">Night discharge plan</ThemedText>
-              <ThemedText style={comboStyles.muted}>
+    <OnBgScreen>
+      {loading ? (
+        <ActivityIndicator size="large" color="#ffffff" />
+      ) : loadError ? (
+        <View style={onBgStyles.onBgPanel}>
+          <ThemedText type="subtitle" lightColor="#fff" style={onBgStyles.onBgTitle}>
+            Night discharge plan
+          </ThemedText>
+          <ThemedText lightColor="#fecaca" style={onBgStyles.onBgErrorText}>
+            {loadError}
+          </ThemedText>
+        </View>
+      ) : (
+        <>
+          <View style={[onBgStyles.onBgPanel, onBgStyles.onBgPanelNight]}>
+            <ThemedText type="subtitle" lightColor="#fff" style={onBgStyles.onBgTitle}>
+              Night discharge plan
+            </ThemedText>
+            <ThemedText lightColor="#fff" style={comboStyles.muted}>
                 Discharge only until sunrise — no solar charging at night.
               </ThemedText>
               {nightWindow ? (
                 <>
-                  <ThemedText type="defaultSemiBold">
+                  <ThemedText type="defaultSemiBold" lightColor="#fff" style={onBgStyles.onBgHighlight}>
                     {nightWindow.city} · {nightWindow.is_currently_dark ? 'Tonight' : 'Upcoming night'}:{' '}
                     {nightWindow.sunset} → {nightWindow.sunrise}
                   </ThemedText>
-                  <ThemedText style={comboStyles.muted}>
+                  <ThemedText lightColor="#fff" style={comboStyles.muted}>
                     Darkness {darknessHoursLabel} h · Battery {availableEnergyWh.toFixed(0)} Wh · Inverter{' '}
                     {inverterMaxPowerWValue.toFixed(0)} W
                   </ThemedText>
                 </>
               ) : (
-                <ThemedText style={comboStyles.muted}>{nightWindowError ?? 'Darkness window loading…'}</ThemedText>
+                <ThemedText lightColor="#fff" style={comboStyles.muted}>
+                  {nightWindowError ?? 'Darkness window loading…'}
+                </ThemedText>
               )}
-            </ThemedView>
+          </View>
 
-            {blockMessage ? (
-              <ThemedView style={[styles.card, styles.blockCard]}>
-                <ThemedText style={styles.warnText}>{blockMessage}</ThemedText>
-              </ThemedView>
-            ) : null}
+          {blockMessage ? (
+            <View style={[onBgStyles.onBgPanel, onBgStyles.onBgAlertPanel]}>
+              <ThemedText lightColor="#fecaca" style={onBgStyles.onBgErrorText}>
+                {blockMessage}
+              </ThemedText>
+            </View>
+          ) : null}
 
             {showSqmStep ? (
-              <ThemedView style={[styles.card, styles.wizardCard]}>
-                <ThemedText type="subtitle">Step 1 — Home size</ThemedText>
-                <ThemedText style={comboStyles.muted}>
+              <View style={onBgStyles.onBgPanel}>
+                <ThemedText type="subtitle" lightColor="#fff" style={onBgStyles.onBgTitle}>
+                  Step 1 — Home size
+                </ThemedText>
+                <ThemedText lightColor="#fff" style={comboStyles.muted}>
                   Enter floor area (m²) so we can estimate indoor/outdoor lights and suggest minimal essential
                   products for the night.
                 </ThemedText>
                 <TextInput
-                  style={styles.input}
+                  style={onBgStyles.onBgInput}
                   keyboardType="numeric"
                   placeholder="e.g. 85"
                   value={homeSqmInput}
                   onChangeText={setHomeSqmInput}
                 />
                 <Pressable
-                  style={({ pressed }) => [styles.primaryButton, pressed && styles.buttonPressed]}
+                  style={({ pressed }) => [onBgStyles.onBgActionButton, pressed && onBgStyles.buttonPressed]}
                   onPress={onSaveHomeSqm}>
-                  <Text style={styles.primaryButtonText}>Continue</Text>
+                  <Text style={onBgStyles.onBgActionButtonText}>Continue</Text>
                 </Pressable>
-              </ThemedView>
+              </View>
             ) : null}
 
             {showSuggestionsStep ? (
-              <ThemedView style={[styles.card, styles.wizardCard]}>
-                <ThemedText type="subtitle">Step 2 — Essential products (minimal load)</ThemedText>
-                <ThemedText style={comboStyles.muted}>
+              <View style={onBgStyles.onBgPanel}>
+                <ThemedText type="subtitle" lightColor="#fff" style={onBgStyles.onBgTitle}>
+                  Step 2 — Essential products (minimal load)
+                </ThemedText>
+                <ThemedText lightColor="#fff" style={comboStyles.muted}>
                   ~{suggestionBundle.lighting.roomCount} rooms · {suggestionBundle.lighting.indoorLightPoints} indoor
                   lights · {suggestionBundle.lighting.outdoorLightPoints} outdoor · home {homeSqm} m²
                 </ThemedText>
-                <ThemedText style={comboStyles.muted}>
+                <ThemedText lightColor="#fff" style={comboStyles.muted}>
                   Powers are low averages so the battery is less likely to empty before sunrise. Select what you want,
                   then start the plan.
                 </ThemedText>
@@ -602,7 +615,7 @@ export default function NightPlanScreen() {
                           {selected ? '☑ ' : '☐ '}
                           {suggestion.name}
                         </ThemedText>
-                        <ThemedText style={comboStyles.muted}>
+                        <ThemedText lightColor="#fff" style={comboStyles.muted}>
                           {suggestion.power} W · Required · {suggestion.description}
                         </ThemedText>
                       </View>
@@ -623,8 +636,8 @@ export default function NightPlanScreen() {
 
                 <Pressable
                   style={({ pressed }) => [
-                    styles.primaryButton,
-                    (pressed || applyingSuggestions) && styles.buttonPressed,
+                    onBgStyles.onBgActionButton,
+                    (pressed || applyingSuggestions) && onBgStyles.buttonPressed,
                     suggestionValidation && !suggestionValidation.allowed ? styles.buttonDisabled : null,
                   ]}
                   disabled={applyingSuggestions || (suggestionValidation !== null && !suggestionValidation.allowed)}
@@ -632,27 +645,23 @@ export default function NightPlanScreen() {
                   {applyingSuggestions ? (
                     <ActivityIndicator color="#fff" />
                   ) : (
-                    <Text style={styles.primaryButtonText}>Enter night plan with selection</Text>
+                    <Text style={onBgStyles.onBgActionButtonText}>Enter night plan with selection</Text>
                   )}
                 </Pressable>
 
                 <Pressable onPress={() => resetNightPlanHomeProfile()}>
-                  <ThemedText style={comboStyles.muted}>Change home size (m²)</ThemedText>
+                  <ThemedText lightColor="#fff" style={comboStyles.muted}>Change home size (m²)</ThemedText>
                 </Pressable>
-              </ThemedView>
+              </View>
             ) : null}
 
             {setupComplete ? (
               <>
-                <ThemedView
-                  style={[
-                    styles.card,
-                    nightPlanModeActive ? styles.modeActiveCard : styles.modeNormalCard,
-                  ]}>
-                  <ThemedText type="subtitle">
+                <View style={onBgStyles.onBgPanel}>
+                  <ThemedText type="subtitle" lightColor="#fff" style={onBgStyles.onBgTitle}>
                     {nightPlanModeActive ? 'Night plan is active' : 'Normal mode (night plan paused)'}
                   </ThemedText>
-                  <ThemedText style={comboStyles.muted}>
+                  <ThemedText lightColor="#fff" style={comboStyles.muted}>
                     {nightPlanModeActive
                       ? 'All night-plan products are on and running. Exit turns them off and removes them from the dashboard running plan.'
                       : 'Entering turns on every product in your night plan and starts the running plan on the dashboard.'}
@@ -661,7 +670,7 @@ export default function NightPlanScreen() {
                     <ThemedView style={styles.savedProductsBox}>
                       <ThemedText type="defaultSemiBold">Products in your night plan</ThemedText>
                       {nightPlanDevices.length === 0 ? (
-                        <ThemedText style={comboStyles.muted}>
+                        <ThemedText lightColor="#fff" style={comboStyles.muted}>
                           None yet — add devices below or re-run essential product suggestions.
                         </ThemedText>
                       ) : (
@@ -681,7 +690,7 @@ export default function NightPlanScreen() {
                   ) : null}
                   {nightPlanModeActive ? (
                     <Pressable
-                      style={({ pressed }) => [styles.secondaryButton, pressed && styles.buttonPressed]}
+                      style={({ pressed }) => [onBgStyles.onBgOutlineButton, pressed && onBgStyles.buttonPressed]}
                       onPress={() => {
                         exitNightPlanMode();
                         setNightPlanRevision((value) => value + 1);
@@ -691,26 +700,28 @@ export default function NightPlanScreen() {
                         );
                         router.back();
                       }}>
-                      <Text style={styles.secondaryButtonText}>Exit night plan · return to normal</Text>
+                      <Text style={onBgStyles.onBgOutlineButtonText}>Exit night plan · return to normal</Text>
                     </Pressable>
                   ) : (
                     <Pressable
                       style={({ pressed }) => [
-                        styles.primaryButton,
-                        (!storeHydrated || pressed) && styles.buttonPressed,
+                        onBgStyles.onBgActionButton,
+                        (!storeHydrated || pressed) && onBgStyles.buttonPressed,
                         !storeHydrated ? styles.buttonDisabled : null,
                       ]}
                       disabled={!storeHydrated}
                       onPress={handleEnterNightPlan}>
-                      <Text style={styles.primaryButtonText}>
+                      <Text style={onBgStyles.onBgActionButtonText}>
                         {storeHydrated ? 'Enter night plan' : 'Loading saved plan…'}
                       </Text>
                     </Pressable>
                   )}
-                </ThemedView>
+                </View>
 
-                <ThemedView style={[styles.card, styles.summaryCard]}>
-                  <ThemedText type="defaultSemiBold">Active night load</ThemedText>
+                <View style={onBgStyles.onBgPanel}>
+                  <ThemedText type="defaultSemiBold" lightColor="#fff" style={onBgStyles.onBgHeading}>
+                    Active night load
+                  </ThemedText>
                   {activePlanValidation ? (
                     <ThemedText style={activePlanValidation.allowed ? styles.okText : styles.warnText}>
                       {activePlanValidation.totalPowerW.toFixed(0)} W ·{' '}
@@ -721,26 +732,28 @@ export default function NightPlanScreen() {
                     </ThemedText>
                   ) : null}
                   {homeSqm ? (
-                    <ThemedText style={comboStyles.muted}>Home profile: {homeSqm} m²</ThemedText>
+                    <ThemedText lightColor="#fff" style={comboStyles.muted}>Home profile: {homeSqm} m²</ThemedText>
                   ) : null}
-                </ThemedView>
+                </View>
 
                 <Pressable
-                  style={({ pressed }) => [styles.secondaryButton, pressed && styles.buttonPressed]}
+                  style={({ pressed }) => [onBgStyles.onBgOutlineButton, pressed && onBgStyles.buttonPressed]}
                   onPress={() => router.push('/manage-devices')}>
-                  <Text style={styles.secondaryButtonText}>Add more electrical devices</Text>
+                  <Text style={onBgStyles.onBgOutlineButtonText}>Add more electrical devices</Text>
                 </Pressable>
 
-                <ThemedView style={[styles.card, styles.devicesCard]}>
-                  <ThemedText type="subtitle">Your night products</ThemedText>
-                  <ThemedText style={comboStyles.muted}>
+                <View style={onBgStyles.onBgPanel}>
+                  <ThemedText type="subtitle" lightColor="#fff" style={onBgStyles.onBgTitle}>
+                    Your night products
+                  </ThemedText>
+                  <ThemedText lightColor="#fff" style={comboStyles.muted}>
                     {nightPlanModeActive
                       ? 'Add devices from the list below. We block additions that could drain the battery before sunrise.'
                       : 'Editing is available while paused. Turn on night plan above to apply these rules to the dashboard.'}
                   </ThemedText>
 
                   {devices.length === 0 ? (
-                    <ThemedText style={comboStyles.muted}>No devices in catalog yet.</ThemedText>
+                    <ThemedText lightColor="#fff" style={comboStyles.muted}>No devices in catalog yet.</ThemedText>
                   ) : (
                     devices.map((device) => {
                       const member = isNightPlanMember(device.id);
@@ -764,7 +777,7 @@ export default function NightPlanScreen() {
                         <ThemedView key={device.id} style={styles.deviceRow}>
                           <View style={styles.deviceRowHeader}>
                             <ThemedText type="defaultSemiBold">{device.name}</ThemedText>
-                            <ThemedText style={comboStyles.muted}>
+                            <ThemedText lightColor="#fff" style={comboStyles.muted}>
                               {device.power} W · {device.essential ? 'Required' : 'Optional'}
                             </ThemedText>
                           </View>
@@ -800,7 +813,7 @@ export default function NightPlanScreen() {
                               </ThemedText>
                               <ThemedText style={styles.warnText}>{toggleBlock.message}</ThemedText>
                               {toggleBlock.failureKind === 'inverter' ? (
-                                <ThemedText style={comboStyles.muted}>
+                                <ThemedText lightColor="#fff" style={comboStyles.muted}>
                                   Shorter run time does not reduce inverter load. Lower simultaneous power (W)
                                   instead.
                                 </ThemedText>
@@ -843,19 +856,21 @@ export default function NightPlanScreen() {
                       );
                     })
                   )}
-                </ThemedView>
+                </View>
 
-                <ThemedView style={[styles.card, styles.resultsCard]}>
-                  <ThemedText type="subtitle">Can run all night</ThemedText>
+                <View style={onBgStyles.onBgPanel}>
+                  <ThemedText type="subtitle" lightColor="#fff" style={onBgStyles.onBgTitle}>
+                    Can run all night
+                  </ThemedText>
                   {nightPlanDevices.length === 0 ? (
-                    <ThemedText style={comboStyles.muted}>No products in the night plan yet.</ThemedText>
+                    <ThemedText lightColor="#fff" style={comboStyles.muted}>No products in the night plan yet.</ThemedText>
                   ) : activeNightDevices.length === 0 ? (
-                    <ThemedText style={comboStyles.muted}>Activate at least one product.</ThemedText>
+                    <ThemedText lightColor="#fff" style={comboStyles.muted}>Activate at least one product.</ThemedText>
                   ) : batteryCapacityWhValue <= 0 ? (
-                    <ThemedText style={comboStyles.muted}>Configure battery in Solar System Settings.</ThemedText>
+                    <ThemedText lightColor="#fff" style={comboStyles.muted}>Configure battery in Solar System Settings.</ThemedText>
                   ) : (
                     <>
-                      <ThemedText type="defaultSemiBold" style={comboStyles.sectionTitle}>
+                      <ThemedText type="defaultSemiBold" lightColor="#fff" style={comboStyles.sectionTitle}>
                         Active products ({deviceAssessments.filter((item) => item.canRunAllNight).length} of{' '}
                         {deviceAssessments.length} OK for full night)
                       </ThemedText>
@@ -866,7 +881,7 @@ export default function NightPlanScreen() {
                       ))}
                     </>
                   )}
-                </ThemedView>
+                </View>
 
                 <Pressable
                   onPress={() => {
@@ -877,14 +892,13 @@ export default function NightPlanScreen() {
                       );
                     }
                   }}>
-                  <ThemedText style={comboStyles.muted}>Re-run essential product suggestions</ThemedText>
+                  <ThemedText lightColor="#fff" style={comboStyles.muted}>Re-run essential product suggestions</ThemedText>
                 </Pressable>
               </>
             ) : null}
           </>
         )}
-      </ScrollView>
-    </SafeAreaView>
+    </OnBgScreen>
   );
 }
 

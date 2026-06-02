@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, ScrollView, StyleSheet } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { ActivityIndicator, View } from 'react-native';
 
 import { EnergyComboList, InverterComboList, comboStyles } from '@/components/combination-catalog-ui';
+import { OnBgScreen } from '@/components/on-bg-screen';
 import { ThemedText } from '@/components/themed-text';
-import { ThemedView } from '@/components/themed-view';
+import { onBgStyles } from '@/styles/on-bg';
 import {
   DEFAULT_INVERTER_MAX_POWER_W,
   DEVICES_URL,
@@ -124,31 +124,34 @@ export default function ConstraintCombinationsScreen() {
   }, []);
 
   return (
-    <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
-      <ScrollView contentContainerStyle={styles.content}>
-        {loading ? (
-          <ActivityIndicator size="large" color="#0a7ea4" />
-        ) : (
-          <>
-            <ThemedView style={[styles.card, styles.inverterCard]}>
-              <ThemedText type="subtitle">Inverter Power Combinations</ThemedText>
-              <ThemedText style={comboStyles.muted}>
+    <OnBgScreen>
+      {loading ? (
+        <ActivityIndicator size="large" color="#ffffff" />
+      ) : (
+        <>
+          <View style={onBgStyles.onBgPanel}>
+            <ThemedText type="subtitle" lightColor="#fff" style={onBgStyles.onBgTitle}>
+              Inverter Power Combinations
+            </ThemedText>
+            <ThemedText lightColor="#fff" style={comboStyles.muted}>
                 Simultaneous load only (max {inverterMaxPowerWValue.toFixed(0)} W). Independent of battery energy.
               </ThemedText>
 
               {devices.length === 0 ? (
-                <ThemedText style={comboStyles.muted}>Add devices to see combinations.</ThemedText>
+                <ThemedText lightColor="#fff" style={comboStyles.muted}>
+                  Add devices to see combinations.
+                </ThemedText>
               ) : inverterPowerCatalog.tooManyDevices ? (
-                <ThemedText style={comboStyles.muted}>
+                <ThemedText lightColor="#fff" style={comboStyles.muted}>
                   Too many devices (max {MAX_INVERTER_ENUM_DEVICES}).
                 </ThemedText>
               ) : (
                 <>
-                  <ThemedText type="defaultSemiBold" style={comboStyles.sectionTitle}>
+                  <ThemedText type="defaultSemiBold" lightColor="#fff" style={comboStyles.sectionTitle}>
                     Required only ({inverterPowerCatalog.essentialOnly.length})
                   </ThemedText>
                   {inverterPowerCatalog.essentialOnly.length === 0 ? (
-                    <ThemedText style={comboStyles.muted}>No required-only combination fits.</ThemedText>
+                    <ThemedText lightColor="#fff" style={comboStyles.muted}>No required-only combination fits.</ThemedText>
                   ) : (
                     <InverterComboList
                       combos={inverterPowerCatalog.essentialOnly}
@@ -159,11 +162,11 @@ export default function ConstraintCombinationsScreen() {
                     />
                   )}
 
-                  <ThemedText type="defaultSemiBold" style={comboStyles.sectionTitle}>
+                  <ThemedText type="defaultSemiBold" lightColor="#fff" style={comboStyles.sectionTitle}>
                     Optional only ({inverterPowerCatalog.optionalOnly.length})
                   </ThemedText>
                   {inverterPowerCatalog.optionalOnly.length === 0 ? (
-                    <ThemedText style={comboStyles.muted}>No optional-only combination fits.</ThemedText>
+                    <ThemedText lightColor="#fff" style={comboStyles.muted}>No optional-only combination fits.</ThemedText>
                   ) : (
                     <InverterComboList
                       combos={inverterPowerCatalog.optionalOnly}
@@ -174,11 +177,11 @@ export default function ConstraintCombinationsScreen() {
                     />
                   )}
 
-                  <ThemedText type="defaultSemiBold" style={comboStyles.sectionTitle}>
+                  <ThemedText type="defaultSemiBold" lightColor="#fff" style={comboStyles.sectionTitle}>
                     Required + Optional ({inverterPowerCatalog.essentialWithOptional.length})
                   </ThemedText>
                   {inverterPowerCatalog.essentialWithOptional.length === 0 ? (
-                    <ThemedText style={comboStyles.muted}>No required + optional combination fits.</ThemedText>
+                    <ThemedText lightColor="#fff" style={comboStyles.muted}>No required + optional combination fits.</ThemedText>
                   ) : (
                     <InverterComboList
                       combos={inverterPowerCatalog.essentialWithOptional}
@@ -189,11 +192,11 @@ export default function ConstraintCombinationsScreen() {
                     />
                   )}
 
-                  <ThemedText type="defaultSemiBold" style={comboStyles.sectionTitle}>
+                  <ThemedText type="defaultSemiBold" lightColor="#fff" style={comboStyles.sectionTitle}>
                     Cannot run together ({inverterPowerCatalog.invalid.length})
                   </ThemedText>
                   {inverterPowerCatalog.invalid.length === 0 ? (
-                    <ThemedText style={comboStyles.muted}>All combinations fit the inverter limit.</ThemedText>
+                    <ThemedText lightColor="#fff" style={comboStyles.muted}>All combinations fit the inverter limit.</ThemedText>
                   ) : (
                     <InverterComboList
                       combos={inverterPowerCatalog.invalid}
@@ -205,27 +208,35 @@ export default function ConstraintCombinationsScreen() {
                   )}
                 </>
               )}
-            </ThemedView>
+          </View>
 
-            <ThemedView style={[styles.card, styles.energyCard]}>
-              <ThemedText type="subtitle">Battery Energy Combinations</ThemedText>
-              <ThemedText style={comboStyles.muted}>
+          <View style={onBgStyles.onBgPanel}>
+            <ThemedText type="subtitle" lightColor="#fff" style={onBgStyles.onBgTitle}>
+              Battery Energy Combinations
+            </ThemedText>
+            <ThemedText lightColor="#fff" style={comboStyles.muted}>
                 Runtime energy (power × hours). Available: {availableEnergyWh.toFixed(1)} Wh.
               </ThemedText>
 
               {devices.length === 0 ? (
-                <ThemedText style={comboStyles.muted}>Add devices to see combinations.</ThemedText>
+                <ThemedText lightColor="#fff" style={comboStyles.muted}>
+                  Add devices to see combinations.
+                </ThemedText>
               ) : energyCombinationCatalog.noEnergyAvailable ? (
-                <ThemedText style={comboStyles.muted}>Configure battery capacity and SOC first.</ThemedText>
+                <ThemedText lightColor="#fff" style={comboStyles.muted}>
+                  Configure battery capacity and SOC first.
+                </ThemedText>
               ) : energyCombinationCatalog.tooManyDevices ? (
-                <ThemedText style={comboStyles.muted}>Too many devices (max {MAX_ENERGY_ENUM_DEVICES}).</ThemedText>
+                <ThemedText lightColor="#fff" style={comboStyles.muted}>
+                  Too many devices (max {MAX_ENERGY_ENUM_DEVICES}).
+                </ThemedText>
               ) : (
                 <>
-                  <ThemedText type="defaultSemiBold" style={comboStyles.sectionTitle}>
+                  <ThemedText type="defaultSemiBold" lightColor="#fff" style={comboStyles.sectionTitle}>
                     Required only ({energyCombinationCatalog.essentialOnly.length})
                   </ThemedText>
                   {energyCombinationCatalog.essentialOnly.length === 0 ? (
-                    <ThemedText style={comboStyles.muted}>No required-only combination fits.</ThemedText>
+                    <ThemedText lightColor="#fff" style={comboStyles.muted}>No required-only combination fits.</ThemedText>
                   ) : (
                     <EnergyComboList
                       combos={energyCombinationCatalog.essentialOnly}
@@ -236,11 +247,11 @@ export default function ConstraintCombinationsScreen() {
                     />
                   )}
 
-                  <ThemedText type="defaultSemiBold" style={comboStyles.sectionTitle}>
+                  <ThemedText type="defaultSemiBold" lightColor="#fff" style={comboStyles.sectionTitle}>
                     Optional only ({energyCombinationCatalog.optionalOnly.length})
                   </ThemedText>
                   {energyCombinationCatalog.optionalOnly.length === 0 ? (
-                    <ThemedText style={comboStyles.muted}>No optional-only combination fits.</ThemedText>
+                    <ThemedText lightColor="#fff" style={comboStyles.muted}>No optional-only combination fits.</ThemedText>
                   ) : (
                     <EnergyComboList
                       combos={energyCombinationCatalog.optionalOnly}
@@ -251,11 +262,11 @@ export default function ConstraintCombinationsScreen() {
                     />
                   )}
 
-                  <ThemedText type="defaultSemiBold" style={comboStyles.sectionTitle}>
+                  <ThemedText type="defaultSemiBold" lightColor="#fff" style={comboStyles.sectionTitle}>
                     Required + Optional ({energyCombinationCatalog.essentialWithOptional.length})
                   </ThemedText>
                   {energyCombinationCatalog.essentialWithOptional.length === 0 ? (
-                    <ThemedText style={comboStyles.muted}>No required + optional combination fits.</ThemedText>
+                    <ThemedText lightColor="#fff" style={comboStyles.muted}>No required + optional combination fits.</ThemedText>
                   ) : (
                     <EnergyComboList
                       combos={energyCombinationCatalog.essentialWithOptional}
@@ -266,11 +277,11 @@ export default function ConstraintCombinationsScreen() {
                     />
                   )}
 
-                  <ThemedText type="defaultSemiBold" style={comboStyles.sectionTitle}>
+                  <ThemedText type="defaultSemiBold" lightColor="#fff" style={comboStyles.sectionTitle}>
                     Cannot run together ({energyCombinationCatalog.invalid.length})
                   </ThemedText>
                   {energyCombinationCatalog.invalid.length === 0 ? (
-                    <ThemedText style={comboStyles.muted}>All combinations fit energy rules.</ThemedText>
+                    <ThemedText lightColor="#fff" style={comboStyles.muted}>All combinations fit energy rules.</ThemedText>
                   ) : (
                     <EnergyComboList
                       combos={energyCombinationCatalog.invalid}
@@ -282,28 +293,9 @@ export default function ConstraintCombinationsScreen() {
                   )}
                 </>
               )}
-            </ThemedView>
-          </>
-        )}
-      </ScrollView>
-    </SafeAreaView>
+          </View>
+        </>
+      )}
+    </OnBgScreen>
   );
 }
-
-const styles = StyleSheet.create({
-  safe: { flex: 1 },
-  content: { padding: 16, gap: 14, paddingBottom: 28 },
-  card: {
-    borderWidth: StyleSheet.hairlineWidth,
-    borderRadius: 12,
-    padding: 14,
-    gap: 10,
-    shadowColor: '#000',
-    shadowOpacity: 0.06,
-    shadowRadius: 8,
-    shadowOffset: { width: 0, height: 3 },
-    elevation: 2,
-  },
-  inverterCard: { borderColor: '#d4c4a8', backgroundColor: '#fffaf0' },
-  energyCard: { borderColor: '#9ec5f8', backgroundColor: '#f0f6ff' },
-});

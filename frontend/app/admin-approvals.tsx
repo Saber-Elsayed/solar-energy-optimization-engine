@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react';
 import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { AuthScreenBackground, authScreenStyles } from '@/components/auth-screen-background';
+import { onBgStyles } from '@/styles/on-bg';
 import { useAuth } from '@/contexts/AuthContext';
 import { getFirebaseAuthErrorMessage } from '@/lib/firebase-auth-errors';
 import {
@@ -104,14 +105,16 @@ export default function AdminApprovalsScreen() {
             <Text style={styles.mutedOnDark}>Loading…</Text>
           </View>
         ) : pendingCount === 0 ? (
-          <View style={styles.card}>
-            <Text style={styles.cardText}>No pending users right now.</Text>
+          <View style={onBgStyles.onBgPanel}>
+            <Text style={authScreenStyles.message}>No pending users right now.</Text>
           </View>
         ) : (
           items.map((row) => (
-            <View key={row.firebase_uid} style={styles.card}>
-              <Text style={styles.email}>{row.email}</Text>
-              <Text style={styles.cardMuted}>Requested: {new Date(row.created_at).toLocaleString()}</Text>
+            <View key={row.firebase_uid} style={onBgStyles.onBgPanel}>
+              <Text style={authScreenStyles.email}>{row.email}</Text>
+              <Text style={authScreenStyles.muted}>
+                Requested: {new Date(row.created_at).toLocaleString()}
+              </Text>
               <View style={styles.row}>
                 <Pressable style={styles.approve} onPress={() => void handleApprove(row.firebase_uid, row.email)}>
                   <Text style={styles.approveText}>Approve</Text>
@@ -134,17 +137,6 @@ const styles = StyleSheet.create({
   headerRow: { flexDirection: 'row', gap: 10, marginTop: 6, flexWrap: 'wrap' },
   mutedOnDark: { color: '#e2e8f0' },
   loadingBox: { flexDirection: 'row', gap: 10, alignItems: 'center', paddingVertical: 10 },
-  card: {
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: 'rgba(255, 255, 255, 0.35)',
-    borderRadius: 12,
-    padding: 14,
-    gap: 8,
-    backgroundColor: 'rgba(255, 255, 255, 0.92)',
-  },
-  cardText: { color: '#475569' },
-  cardMuted: { color: '#64748b' },
-  email: { fontSize: 16, fontWeight: '700', color: '#0a7ea4' },
   row: { flexDirection: 'row', gap: 10, flexWrap: 'wrap' },
   approve: {
     backgroundColor: '#15803d',

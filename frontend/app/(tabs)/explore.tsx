@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react';
-import { ActivityIndicator, Platform, Pressable, ScrollView, StyleSheet, TextInput } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { ActivityIndicator, Platform, Pressable, TextInput, View } from 'react-native';
+
+import { OnBgScreen } from '@/components/on-bg-screen';
 import { ThemedText } from '@/components/themed-text';
-import { ThemedView } from '@/components/themed-view';
+import { onBgStyles } from '@/styles/on-bg';
+
 type CitySuggestion = {
   name: string;
   country: string;
@@ -94,92 +96,73 @@ export default function SelectCityScreen() {
   };
 
   return (
-    <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
-      <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="always">
-        <ThemedView style={styles.card}>
-          <ThemedText type="subtitle">בחר עיר / Select City</ThemedText>
-          <ThemedText style={styles.label}>City</ThemedText>
-          <TextInput style={styles.input} value={query} onChangeText={setQuery} autoCapitalize="words" />
+    <OnBgScreen keyboardShouldPersistTaps="always">
+      <View style={onBgStyles.onBgPanel}>
+        <ThemedText type="subtitle" lightColor="#fff" style={onBgStyles.onBgTitle}>
+          בחר עיר / Select City
+        </ThemedText>
+        <ThemedText lightColor="#fff" style={onBgStyles.onBgLabel}>
+          City
+        </ThemedText>
+        <TextInput
+          style={onBgStyles.onBgInput}
+          value={query}
+          onChangeText={setQuery}
+          autoCapitalize="words"
+          placeholderTextColor="rgba(255, 255, 255, 0.55)"
+        />
 
-          {loadingCities && <ActivityIndicator size="small" color="#0a7ea4" />}
-          {!!error && <ThemedText style={styles.error}>{error}</ThemedText>}
+        {loadingCities ? <ActivityIndicator size="small" color="#ffffff" /> : null}
+        {!!error ? <ThemedText lightColor="#fecaca" style={onBgStyles.onBgErrorText}>{error}</ThemedText> : null}
 
-          {suggestions.length > 0 && (
-            <ThemedView style={styles.dropdown}>
-              {suggestions.slice(0, 8).map((item, index) => (
-                <Pressable key={`${item.name}-${item.country}-${index}`} style={({ pressed }) => [styles.option, pressed && styles.pressed]} onPress={() => onSelect(item)}>
-                  <ThemedText>{item.name}</ThemedText>
-                  <ThemedText style={styles.country}>{item.country}</ThemedText>
-                </Pressable>
-              ))}
-            </ThemedView>
-          )}
-        </ThemedView>
+        {suggestions.length > 0 && (
+          <View style={onBgStyles.onBgDropdown}>
+            {suggestions.slice(0, 8).map((item, index) => (
+              <Pressable
+                key={`${item.name}-${item.country}-${index}`}
+                style={({ pressed }) => [onBgStyles.onBgCityRow, pressed && onBgStyles.buttonPressed]}
+                onPress={() => onSelect(item)}
+              >
+                <ThemedText lightColor="#fff" style={onBgStyles.onBgBody}>
+                  {item.name}
+                </ThemedText>
+                <ThemedText lightColor="#fff" style={onBgStyles.onBgMuted}>
+                  {item.country}
+                </ThemedText>
+              </Pressable>
+            ))}
+          </View>
+        )}
+      </View>
 
-        <ThemedView style={styles.card}>
-          <ThemedText type="subtitle">Weather Data</ThemedText>
-          {loadingWeather ? (
-            <ActivityIndicator size="small" color="#0a7ea4" />
-          ) : selected && weather ? (
-            <ThemedView style={styles.weatherCard}>
-              <ThemedText>City: {weather.city ?? selected.name}</ThemedText>
-              <ThemedText>Temperature: {weather.temperature ?? 'N/A'}</ThemedText>
-              <ThemedText>Condition: {weather.condition ?? 'N/A'}</ThemedText>
-              <ThemedText>Estimated energy: {typeof weather.energy_estimate === 'number' ? weather.energy_estimate.toFixed(2) : 'N/A'}</ThemedText>
-            </ThemedView>
-          ) : (
-            <ThemedText style={styles.muted}>Select a city to view weather details.</ThemedText>
-          )}
-        </ThemedView>
-      </ScrollView>
-    </SafeAreaView>
+      <View style={onBgStyles.onBgPanel}>
+        <ThemedText type="subtitle" lightColor="#fff" style={onBgStyles.onBgTitle}>
+          Weather Data
+        </ThemedText>
+        {loadingWeather ? (
+          <ActivityIndicator size="small" color="#ffffff" />
+        ) : selected && weather ? (
+          <View style={onBgStyles.onBgPanelInner}>
+            <ThemedText lightColor="#fff" style={onBgStyles.onBgBody}>
+              City: {weather.city ?? selected.name}
+            </ThemedText>
+            <ThemedText lightColor="#fff" style={onBgStyles.onBgBody}>
+              Temperature: {weather.temperature ?? 'N/A'}
+            </ThemedText>
+            <ThemedText lightColor="#fff" style={onBgStyles.onBgBody}>
+              Condition: {weather.condition ?? 'N/A'}
+            </ThemedText>
+            <ThemedText lightColor="#fff" style={onBgStyles.onBgBody}>
+              Estimated energy:{' '}
+              {typeof weather.energy_estimate === 'number' ? weather.energy_estimate.toFixed(2) : 'N/A'}
+            </ThemedText>
+          </View>
+        ) : (
+          <ThemedText lightColor="#fff" style={onBgStyles.onBgMuted}>
+            Select a city to view weather details.
+          </ThemedText>
+        )}
+      </View>
+    </OnBgScreen>
   );
 }
-
-const styles = StyleSheet.create({
-  safe: { flex: 1 },
-  content: { padding: 16, gap: 14, paddingBottom: 24 },
-  card: {
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#d8e0ea',
-    backgroundColor: '#f8fbff',
-    borderRadius: 12,
-    padding: 14,
-    gap: 8,
-  },
-  label: { fontSize: 14 },
-  input: {
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#c6ced8',
-    backgroundColor: '#fff',
-    borderRadius: 8,
-    paddingHorizontal: 10,
-    paddingVertical: 10,
-    fontSize: 15,
-  },
-  dropdown: {
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#ccd6e2',
-    borderRadius: 8,
-    backgroundColor: '#fff',
-    overflow: 'hidden',
-  },
-  option: {
-    paddingHorizontal: 10,
-    paddingVertical: 9,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#e6edf5',
-  },
-  pressed: { opacity: 0.8 },
-  country: { opacity: 0.7, fontSize: 12 },
-  error: { color: '#a12222' },
-  muted: { opacity: 0.7 },
-  weatherCard: {
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#a9c6e7',
-    backgroundColor: '#eef5ff',
-    borderRadius: 10,
-    padding: 10,
-    gap: 4,
-  },
-});

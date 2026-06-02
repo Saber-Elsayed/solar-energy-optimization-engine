@@ -1,9 +1,8 @@
 import { useEffect, useState } from 'react';
-import { ActivityIndicator, ScrollView, StyleSheet, Switch } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { ActivityIndicator, Switch, View } from 'react-native';
 
+import { OnBgScreen } from '@/components/on-bg-screen';
 import { ThemedText } from '@/components/themed-text';
-import { ThemedView } from '@/components/themed-view';
 import { DEVICES_URL } from '@/lib/api-config';
 import {
   hydrateDeviceEnabledStore,
@@ -14,6 +13,7 @@ import {
 } from '@/lib/device-enabled-store';
 import type { ApiDevice } from '@/lib/device-types';
 import { deviceEnergyWh } from '@/lib/optimization-catalog';
+import { onBgStyles } from '@/styles/on-bg';
 
 export default function DevicesOverviewScreen() {
   const [devices, setDevices] = useState<ApiDevice[]>([]);
@@ -47,102 +47,84 @@ export default function DevicesOverviewScreen() {
   const enabledCount = devices.filter((device) => isDeviceEnabled(device.id)).length;
 
   return (
-    <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
-      <ScrollView contentContainerStyle={styles.content}>
-        <ThemedView style={styles.card}>
-          <ThemedText type="subtitle">Saved Devices ({devices.length})</ThemedText>
-          <ThemedText style={styles.muted}>
-            {enabledCount} active · Turn off a product to exclude it from all energy calculations.
-          </ThemedText>
+    <OnBgScreen>
+      <View style={onBgStyles.onBgPanel}>
+        <ThemedText type="subtitle" lightColor="#fff" style={onBgStyles.onBgTitle}>
+          Saved Devices ({devices.length})
+        </ThemedText>
+        <ThemedText lightColor="#fff" style={onBgStyles.onBgMuted}>
+          {enabledCount} active · Turn off a product to exclude it from all energy calculations.
+        </ThemedText>
 
-          {loading ? (
-            <ActivityIndicator size="large" color="#0a7ea4" />
-          ) : devices.length === 0 ? (
-            <ThemedText style={styles.muted}>No products saved yet.</ThemedText>
-          ) : (
-            devices.map((device) => {
-              const enabled = isDeviceEnabled(device.id);
-              return (
-                <ThemedView
-                  key={device.id}
-                  style={[styles.deviceRowCard, !enabled && styles.deviceRowCardDisabled]}>
-                  <ThemedView style={styles.deviceRowTop}>
-                    <ThemedView style={styles.deviceTitleBlock}>
-                      <ThemedText type="defaultSemiBold" style={!enabled ? styles.disabledText : undefined}>
-                        {device.name}
-                      </ThemedText>
-                      <ThemedText style={styles.muted}>{enabled ? 'Active' : 'Off — not consuming energy'}</ThemedText>
-                    </ThemedView>
-                    <ThemedView style={styles.switchBlock}>
-                      <ThemedText style={styles.switchLabel}>{enabled ? 'On' : 'Off'}</ThemedText>
-                      <Switch
-                        value={enabled}
-                        onValueChange={(nextEnabled) => setDeviceEnabled(device.id, nextEnabled)}
-                        trackColor={{ false: '#c9d4e2', true: '#9ad3a6' }}
-                        thumbColor={enabled ? '#1f7a34' : '#f4f4f4'}
-                      />
-                    </ThemedView>
-                  </ThemedView>
-                  <ThemedText style={styles.muted}>
-                    {device.essential ? 'Required' : 'Optional'} · Priority {device.priority} · {device.duration} min
-                  </ThemedText>
-                  <ThemedText style={styles.muted}>
-                    Schedule {device.start_time} – {device.end_time} · Energy{' '}
-                    {enabled ? deviceEnergyWh(device).toFixed(0) : '0'} Wh
-                  </ThemedText>
-                  <ThemedText style={styles.devicePowerBadge}>{device.power} W</ThemedText>
-                </ThemedView>
-              );
-            })
-          )}
-        </ThemedView>
-      </ScrollView>
-    </SafeAreaView>
+        {loading ? (
+          <ActivityIndicator size="large" color="#ffffff" />
+        ) : devices.length === 0 ? (
+          <ThemedText lightColor="#fff" style={onBgStyles.onBgMuted}>
+            No products saved yet.
+          </ThemedText>
+        ) : (
+          devices.map((device) => {
+            const enabled = isDeviceEnabled(device.id);
+            return (
+              <View
+                key={device.id}
+                style={[onBgStyles.onBgPanelInner, !enabled && styles.deviceRowDisabled]}
+              >
+                <View style={styles.deviceRowTop}>
+                  <View style={styles.deviceTitleBlock}>
+                    <ThemedText type="defaultSemiBold" lightColor="#fff" style={onBgStyles.onBgBody}>
+                      {device.name}
+                    </ThemedText>
+                    <ThemedText lightColor="#fff" style={onBgStyles.onBgMuted}>
+                      {enabled ? 'Active' : 'Off — not consuming energy'}
+                    </ThemedText>
+                  </View>
+                  <View style={styles.switchBlock}>
+                    <ThemedText lightColor="#fff" style={styles.switchLabel}>
+                      {enabled ? 'On' : 'Off'}
+                    </ThemedText>
+                    <Switch
+                      value={enabled}
+                      onValueChange={(nextEnabled) => setDeviceEnabled(device.id, nextEnabled)}
+                      trackColor={{ false: '#64748b', true: '#9ad3a6' }}
+                      thumbColor={enabled ? '#1f7a34' : '#f4f4f4'}
+                    />
+                  </View>
+                </View>
+                <ThemedText lightColor="#fff" style={onBgStyles.onBgMuted}>
+                  {device.essential ? 'Required' : 'Optional'} · Priority {device.priority} · {device.duration}{' '}
+                  min
+                </ThemedText>
+                <ThemedText lightColor="#fff" style={onBgStyles.onBgMuted}>
+                  Schedule {device.start_time} – {device.end_time} · Energy{' '}
+                  {enabled ? deviceEnergyWh(device).toFixed(0) : '0'} Wh
+                </ThemedText>
+                <ThemedText lightColor="#fff" style={onBgStyles.onBgBadge}>
+                  {device.power} W
+                </ThemedText>
+              </View>
+            );
+          })
+        )}
+      </View>
+    </OnBgScreen>
   );
 }
 
-const styles = StyleSheet.create({
-  safe: { flex: 1 },
-  content: { padding: 16, paddingBottom: 28 },
-  card: {
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#d7deea',
-    borderRadius: 12,
-    backgroundColor: '#f8fbff',
-    padding: 14,
-    gap: 10,
-  },
-  muted: { opacity: 0.7 },
-  deviceRowCard: {
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#d0dae6',
-    borderRadius: 10,
-    backgroundColor: '#fff',
-    padding: 12,
-    gap: 6,
-  },
-  deviceRowCardDisabled: {
-    borderColor: '#e0e0e0',
-    backgroundColor: '#f5f5f5',
-  },
+const styles = {
+  deviceRowDisabled: { opacity: 0.72 },
   deviceRowTop: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
+    flexDirection: 'row' as const,
+    justifyContent: 'space-between' as const,
+    alignItems: 'center' as const,
     gap: 12,
   },
   deviceTitleBlock: { flex: 1, gap: 2 },
-  switchBlock: { alignItems: 'center', gap: 2 },
-  switchLabel: { fontSize: 12, opacity: 0.7 },
-  disabledText: { opacity: 0.55 },
-  devicePowerBadge: {
-    alignSelf: 'flex-start',
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#9ec5f8',
-    borderRadius: 6,
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-    backgroundColor: '#eef5ff',
-    fontWeight: '600',
+  switchBlock: { alignItems: 'center' as const, gap: 2 },
+  switchLabel: {
+    fontSize: 12,
+    fontWeight: '600' as const,
+    color: '#fff',
+    opacity: 0.9,
   },
-});
+};

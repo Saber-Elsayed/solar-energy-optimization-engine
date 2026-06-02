@@ -2,6 +2,8 @@ import type { ReactNode } from 'react';
 import { StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { onBgStyles } from '@/styles/on-bg';
+
 type AuthScreenBackgroundProps = {
   children: ReactNode;
   /** `form` — centered card (login/register). `page` — full-width scrollable content (admin). */
@@ -20,15 +22,9 @@ export function AuthScreenBackground({ children, variant = 'form' }: AuthScreenB
 }
 
 export const authScreenStyles = StyleSheet.create({
-  title: { fontSize: 24, fontWeight: '700', marginBottom: 8, color: '#fff' },
+  title: { ...onBgStyles.onBgTitle, marginBottom: 8, color: '#fff' },
   input: {
-    borderWidth: 1,
-    borderColor: '#d1d5db',
-    borderRadius: 8,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    backgroundColor: 'rgba(255, 255, 255, 0.95)',
-    color: '#0f172a',
+    ...onBgStyles.onBgInput,
   },
   inputError: {
     borderColor: '#b91c1c',
@@ -61,13 +57,10 @@ const styles = StyleSheet.create({
   safeForm: { flex: 1, justifyContent: 'center', padding: 20, width: '100%' },
   safePage: { flex: 1, width: '100%' },
   formContainer: {
-    gap: 12,
-    borderRadius: 10,
-    padding: 20,
+    ...onBgStyles.onBgPanel,
     width: '100%',
     maxWidth: 420,
     alignSelf: 'center',
-    backgroundColor: 'rgba(255, 255, 255, 0.12)',
   },
   pageContainer: {
     flex: 1,

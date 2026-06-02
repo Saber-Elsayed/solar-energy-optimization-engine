@@ -1,7 +1,7 @@
-import { Pressable, StyleSheet, Text } from 'react-native';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { ThemedText } from '@/components/themed-text';
-import { ThemedView } from '@/components/themed-view';
+import { onBgStyles } from '@/styles/on-bg';
 import type { EnergyCombinationSet, InverterPowerSet, RunnableCombination } from '@/lib/optimization-catalog';
 import type { TwelveHourRunPlan } from '@/lib/twelve-hour-run-forecast';
 
@@ -34,38 +34,38 @@ export function InverterComboList({
   const titleStyle = variant === 'valid' ? comboStyles.inverterValidText : comboStyles.inverterInvalidText;
 
   return (
-    <ThemedView style={comboStyles.comboList}>
+    <View style={comboStyles.comboList}>
       {visibleCombos.map((combo) => (
-        <ThemedView key={`${variant}-${combo.id}`} style={frameStyle}>
-          <ThemedText type="defaultSemiBold" style={titleStyle}>
+        <View key={`${variant}-${combo.id}`} style={frameStyle}>
+          <ThemedText type="defaultSemiBold" lightColor="#fff" style={titleStyle}>
             {combo.summary}
           </ThemedText>
-          <ThemedText style={comboStyles.muted}>
+          <ThemedText lightColor="#fff" style={comboStyles.muted}>
             {combo.essentialCount} required · {combo.optionalCount} optional · {combo.devices.length} device
             {combo.devices.length === 1 ? '' : 's'}
             {variant === 'valid'
               ? ` · headroom ${(inverterMaxPowerW - combo.totalPowerW).toFixed(0)} W`
               : ` · exceeds by ${(combo.totalPowerW - inverterMaxPowerW).toFixed(0)} W`}
           </ThemedText>
-        </ThemedView>
+        </View>
       ))}
 
       {!showAll && hiddenCount > 0 ? (
         <Pressable
-          style={({ pressed }) => [comboStyles.showAllButton, pressed && comboStyles.buttonPressed]}
+          style={({ pressed }) => [onBgStyles.onBgOutlineButton, pressed && onBgStyles.buttonPressed]}
           onPress={onToggleShowAll}>
-          <Text style={comboStyles.showAllButtonText}>Show all ({hiddenCount} more)</Text>
+          <Text style={onBgStyles.onBgOutlineButtonText}>Show all ({hiddenCount} more)</Text>
         </Pressable>
       ) : null}
 
       {showAll && combos.length > INITIAL_INVERTER_COMBOS_SHOWN ? (
         <Pressable
-          style={({ pressed }) => [comboStyles.showAllButton, pressed && comboStyles.buttonPressed]}
+          style={({ pressed }) => [onBgStyles.onBgOutlineButton, pressed && onBgStyles.buttonPressed]}
           onPress={onToggleShowAll}>
-          <Text style={comboStyles.showAllButtonText}>Show less</Text>
+          <Text style={onBgStyles.onBgOutlineButtonText}>Show less</Text>
         </Pressable>
       ) : null}
-    </ThemedView>
+    </View>
   );
 }
 
@@ -94,38 +94,38 @@ export function EnergyComboList({
   const titleStyle = variant === 'valid' ? comboStyles.energyValidText : comboStyles.energyInvalidText;
 
   return (
-    <ThemedView style={comboStyles.comboList}>
+    <View style={comboStyles.comboList}>
       {visibleCombos.map((combo) => (
-        <ThemedView key={`energy-${variant}-${combo.id}`} style={frameStyle}>
-          <ThemedText type="defaultSemiBold" style={titleStyle}>
+        <View key={`energy-${variant}-${combo.id}`} style={frameStyle}>
+          <ThemedText type="defaultSemiBold" lightColor="#fff" style={titleStyle}>
             {combo.summary}
           </ThemedText>
-          <ThemedText style={comboStyles.muted}>
+          <ThemedText lightColor="#fff" style={comboStyles.muted}>
             {combo.essentialCount} required · {combo.optionalCount} optional · {combo.devices.length} device
             {combo.devices.length === 1 ? '' : 's'}
             {variant === 'valid'
               ? ` · headroom ${(availableEnergyWh - combo.totalEnergyWh).toFixed(0)} Wh`
               : ` · exceeds by ${(combo.totalEnergyWh - availableEnergyWh).toFixed(0)} Wh`}
           </ThemedText>
-        </ThemedView>
+        </View>
       ))}
 
       {!showAll && hiddenCount > 0 ? (
         <Pressable
-          style={({ pressed }) => [comboStyles.showAllButton, pressed && comboStyles.buttonPressed]}
+          style={({ pressed }) => [onBgStyles.onBgOutlineButton, pressed && onBgStyles.buttonPressed]}
           onPress={onToggleShowAll}>
-          <Text style={comboStyles.showAllButtonText}>Show all ({hiddenCount} more)</Text>
+          <Text style={onBgStyles.onBgOutlineButtonText}>Show all ({hiddenCount} more)</Text>
         </Pressable>
       ) : null}
 
       {showAll && combos.length > INITIAL_ENERGY_COMBOS_SHOWN ? (
         <Pressable
-          style={({ pressed }) => [comboStyles.showAllButton, pressed && comboStyles.buttonPressed]}
+          style={({ pressed }) => [onBgStyles.onBgOutlineButton, pressed && onBgStyles.buttonPressed]}
           onPress={onToggleShowAll}>
-          <Text style={comboStyles.showAllButtonText}>Show less</Text>
+          <Text style={onBgStyles.onBgOutlineButtonText}>Show less</Text>
         </Pressable>
       ) : null}
-    </ThemedView>
+    </View>
   );
 }
 
@@ -156,7 +156,7 @@ export function RunnableComboList({
   const hiddenCount = Math.max(0, combos.length - INITIAL_RUNNABLE_COMBOS_SHOWN);
 
   return (
-    <ThemedView style={comboStyles.comboList}>
+    <View style={comboStyles.comboList}>
       {visibleCombos.map((combo) => {
         const isSelected = selectedId === combo.id;
         return (
@@ -165,14 +165,14 @@ export function RunnableComboList({
             style={({ pressed }) => [
               comboStyles.runnableComboFrame,
               isSelected && comboStyles.runnableComboFrameSelected,
-              pressed && comboStyles.buttonPressed,
+              pressed && onBgStyles.buttonPressed,
             ]}
             onPress={() => onSelect(combo.id)}>
-            <ThemedText type="defaultSemiBold" style={comboStyles.runnableComboText}>
+            <ThemedText type="defaultSemiBold" lightColor="#fff" style={comboStyles.runnableComboText}>
               {isSelected ? '✓ ' : ''}
               {combo.summary}
             </ThemedText>
-            <ThemedText style={comboStyles.muted}>
+            <ThemedText lightColor="#fff" style={comboStyles.muted}>
               {combo.essentialCount} required · {combo.optionalCount} optional · headroom{' '}
               {(inverterMaxPowerW - combo.totalPowerW).toFixed(0)} W /{' '}
               {(availableEnergyWh - combo.totalEnergyWh).toFixed(0)} Wh
@@ -184,20 +184,20 @@ export function RunnableComboList({
 
       {!showAll && hiddenCount > 0 ? (
         <Pressable
-          style={({ pressed }) => [comboStyles.showAllButton, pressed && comboStyles.buttonPressed]}
+          style={({ pressed }) => [onBgStyles.onBgOutlineButton, pressed && onBgStyles.buttonPressed]}
           onPress={onToggleShowAll}>
-          <Text style={comboStyles.showAllButtonText}>Show all ({hiddenCount} more)</Text>
+          <Text style={onBgStyles.onBgOutlineButtonText}>Show all ({hiddenCount} more)</Text>
         </Pressable>
       ) : null}
 
       {showAll && combos.length > INITIAL_RUNNABLE_COMBOS_SHOWN ? (
         <Pressable
-          style={({ pressed }) => [comboStyles.showAllButton, pressed && comboStyles.buttonPressed]}
+          style={({ pressed }) => [onBgStyles.onBgOutlineButton, pressed && onBgStyles.buttonPressed]}
           onPress={onToggleShowAll}>
-          <Text style={comboStyles.showAllButtonText}>Show less</Text>
+          <Text style={onBgStyles.onBgOutlineButtonText}>Show less</Text>
         </Pressable>
       ) : null}
-    </ThemedView>
+    </View>
   );
 }
 
@@ -222,17 +222,17 @@ export function TwelveHourRunComboList({
   const hiddenCount = Math.max(0, plans.length - INITIAL_RUNNABLE_COMBOS_SHOWN);
 
   return (
-    <ThemedView style={comboStyles.comboList}>
+    <View style={comboStyles.comboList}>
       {visiblePlans.map((plan) => (
-        <ThemedView key={`twelve-hour-${plan.id}`} style={comboStyles.twelveHourComboFrame}>
-          <ThemedText type="defaultSemiBold" style={comboStyles.twelveHourComboText}>
+        <View key={`twelve-hour-${plan.id}`} style={comboStyles.twelveHourComboFrame}>
+          <ThemedText type="defaultSemiBold" lightColor="#fff" style={comboStyles.twelveHourComboText}>
             {plan.summary}
           </ThemedText>
-          <ThemedText style={comboStyles.muted}>
+          <ThemedText lightColor="#fff" style={comboStyles.muted}>
             {plan.essentialCount} required · {plan.optionalCount} optional · {plan.devices.length} device
             {plan.devices.length === 1 ? '' : 's'} · load {plan.totalPowerW.toFixed(0)} W
           </ThemedText>
-          <ThemedText style={comboStyles.muted}>
+          <ThemedText lightColor="#fff" style={comboStyles.muted}>
             {plan.runsFullHorizon
               ? `Runs all ${planningHorizonHours} forecast hours without draining the battery`
               : `Runs ${plan.sustainability.sustainableHours} of ${planningHorizonHours} hours${
@@ -240,122 +240,89 @@ export function TwelveHourRunComboList({
                 }`}
           </ThemedText>
           {!plan.runsFullHorizon && plan.sustainability.lastSustainableHour ? (
-            <ThemedText style={comboStyles.muted}>
+            <ThemedText lightColor="#fff" style={comboStyles.muted}>
               Covers continuous load through {plan.sustainability.lastSustainableHour}
             </ThemedText>
           ) : null}
-        </ThemedView>
+        </View>
       ))}
 
       {!showAll && hiddenCount > 0 ? (
         <Pressable
-          style={({ pressed }) => [comboStyles.showAllButton, pressed && comboStyles.buttonPressed]}
+          style={({ pressed }) => [onBgStyles.onBgOutlineButton, pressed && onBgStyles.buttonPressed]}
           onPress={onToggleShowAll}>
-          <Text style={comboStyles.showAllButtonText}>Show all ({hiddenCount} more)</Text>
+          <Text style={onBgStyles.onBgOutlineButtonText}>Show all ({hiddenCount} more)</Text>
         </Pressable>
       ) : null}
 
       {showAll && plans.length > INITIAL_RUNNABLE_COMBOS_SHOWN ? (
         <Pressable
-          style={({ pressed }) => [comboStyles.showAllButton, pressed && comboStyles.buttonPressed]}
+          style={({ pressed }) => [onBgStyles.onBgOutlineButton, pressed && onBgStyles.buttonPressed]}
           onPress={onToggleShowAll}>
-          <Text style={comboStyles.showAllButtonText}>Show less</Text>
+          <Text style={onBgStyles.onBgOutlineButtonText}>Show less</Text>
         </Pressable>
       ) : null}
-    </ThemedView>
+    </View>
   );
 }
 
+const comboFrameBase = {
+  borderWidth: 2,
+  borderRadius: 10,
+  padding: 12,
+  gap: 6,
+  backgroundColor: 'rgba(0, 0, 0, 0.12)',
+} as const;
+
 export const comboStyles = StyleSheet.create({
-  muted: { opacity: 0.7 },
+  muted: onBgStyles.onBgMuted,
   comboList: { gap: 10, marginBottom: 4 },
-  sectionTitle: { marginTop: 12, marginBottom: 4 },
+  sectionTitle: {
+    ...onBgStyles.onBgSectionTitle,
+    marginTop: 12,
+    marginBottom: 4,
+  },
   inverterComboFrameValid: {
-    borderWidth: 2,
-    borderColor: '#3d9a52',
-    borderRadius: 10,
-    backgroundColor: '#ffffff',
-    padding: 12,
-    gap: 6,
-    shadowColor: '#000',
-    shadowOpacity: 0.06,
-    shadowRadius: 4,
-    shadowOffset: { width: 0, height: 2 },
-    elevation: 2,
+    ...comboFrameBase,
+    borderColor: 'rgba(187, 247, 208, 0.95)',
   },
   inverterComboFrameInvalid: {
-    borderWidth: 2,
-    borderColor: '#c45c4a',
-    borderRadius: 10,
-    backgroundColor: '#ffffff',
-    padding: 12,
-    gap: 6,
-    shadowColor: '#000',
-    shadowOpacity: 0.06,
-    shadowRadius: 4,
-    shadowOffset: { width: 0, height: 2 },
-    elevation: 2,
+    ...comboFrameBase,
+    borderColor: '#ffb4a8',
   },
   energyComboFrameValid: {
-    borderWidth: 2,
-    borderColor: '#3d7abf',
-    borderRadius: 10,
-    backgroundColor: '#ffffff',
-    padding: 12,
-    gap: 6,
-    shadowColor: '#000',
-    shadowOpacity: 0.06,
-    shadowRadius: 4,
-    shadowOffset: { width: 0, height: 2 },
-    elevation: 2,
+    ...comboFrameBase,
+    borderColor: 'rgba(191, 219, 254, 0.95)',
   },
   energyComboFrameInvalid: {
-    borderWidth: 2,
-    borderColor: '#c45c4a',
-    borderRadius: 10,
-    backgroundColor: '#ffffff',
-    padding: 12,
-    gap: 6,
-    shadowColor: '#000',
-    shadowOpacity: 0.06,
-    shadowRadius: 4,
-    shadowOffset: { width: 0, height: 2 },
-    elevation: 2,
+    ...comboFrameBase,
+    borderColor: '#ffb4a8',
   },
-  inverterValidText: { color: '#1f5c2e' },
-  inverterInvalidText: { color: '#8b3a2a' },
-  energyValidText: { color: '#1b4b7a' },
-  energyInvalidText: { color: '#8b3a2a' },
-  showAllButton: {
-    alignSelf: 'flex-start',
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#0a7ea4',
-    borderRadius: 8,
-    backgroundColor: '#fff',
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    marginTop: 2,
-  },
-  showAllButtonText: { color: '#0a7ea4', fontSize: 14, fontWeight: '600' },
-  buttonPressed: { opacity: 0.85 },
+  inverterValidText: onBgStyles.onBgHighlight,
+  inverterInvalidText: onBgStyles.onBgBody,
+  energyValidText: onBgStyles.onBgHighlight,
+  energyInvalidText: onBgStyles.onBgBody,
   runnableComboFrame: {
-    borderWidth: 2,
-    borderColor: '#9ad3a6',
-    borderRadius: 10,
-    backgroundColor: '#ffffff',
-    padding: 12,
-    gap: 6,
+    ...comboFrameBase,
+    borderColor: 'rgba(187, 247, 208, 0.9)',
   },
-  runnableComboFrameSelected: { borderColor: '#1f7a34', backgroundColor: '#e8f8eb' },
-  runnableComboText: { color: '#1f5c2e' },
-  selectComboButtonText: { color: '#0a7ea4', fontSize: 13, fontWeight: '700', marginTop: 2 },
+  runnableComboFrameSelected: {
+    borderColor: '#bbf7d0',
+    backgroundColor: 'rgba(31, 122, 52, 0.25)',
+  },
+  runnableComboText: onBgStyles.onBgHighlight,
+  selectComboButtonText: {
+    color: '#e0f2fe',
+    fontSize: 14,
+    fontWeight: '700',
+    marginTop: 2,
+    textShadowColor: 'rgba(0, 0, 0, 0.65)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 3,
+  },
   twelveHourComboFrame: {
-    borderWidth: 2,
-    borderColor: '#6ba3d9',
-    borderRadius: 10,
-    backgroundColor: '#ffffff',
-    padding: 12,
-    gap: 6,
+    ...comboFrameBase,
+    borderColor: 'rgba(191, 219, 254, 0.95)',
   },
-  twelveHourComboText: { color: '#1b4b7a' },
+  twelveHourComboText: onBgStyles.onBgHighlight,
 });

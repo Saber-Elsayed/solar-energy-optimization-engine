@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, ScrollView, StyleSheet } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { ActivityIndicator, View } from 'react-native';
 
 import { RunnableComboList, comboStyles } from '@/components/combination-catalog-ui';
+import { OnBgScreen } from '@/components/on-bg-screen';
 import { ThemedText } from '@/components/themed-text';
-import { ThemedView } from '@/components/themed-view';
+import { onBgStyles } from '@/styles/on-bg';
 import {
   DEFAULT_INVERTER_MAX_POWER_W,
   DEVICES_URL,
@@ -133,39 +133,44 @@ export default function FeasibleCombinationsScreen() {
   };
 
   return (
-    <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
-      <ScrollView contentContainerStyle={styles.content}>
-        {loading ? (
-          <ActivityIndicator size="large" color="#0a7ea4" />
-        ) : (
-          <ThemedView style={[styles.card, styles.runnableCard]}>
-            <ThemedText type="subtitle">Feasible Combinations (Inverter & Energy)</ThemedText>
-            <ThemedText style={comboStyles.muted}>
+    <OnBgScreen>
+      {loading ? (
+        <ActivityIndicator size="large" color="#ffffff" />
+      ) : (
+        <View style={onBgStyles.onBgPanel}>
+          <ThemedText type="subtitle" lightColor="#fff" style={onBgStyles.onBgTitle}>
+            Feasible Combinations (Inverter & Energy)
+          </ThemedText>
+          <ThemedText lightColor="#fff" style={comboStyles.muted}>
               Combinations that satisfy inverter power ({inverterMaxPowerWValue.toFixed(0)} W), battery energy (
               {availableEnergyWh.toFixed(1)} Wh), and required/optional rules. Tap to select a running plan.
             </ThemedText>
 
-            {devices.length === 0 ? (
-              <ThemedText style={comboStyles.muted}>Add devices to see feasible combinations.</ThemedText>
-            ) : runnableCombinationCatalog.noEnergyAvailable ? (
-              <ThemedText style={comboStyles.muted}>
-                Configure battery capacity and SOC to calculate feasible combinations.
-              </ThemedText>
-            ) : runnableCombinationCatalog.tooManyDevices ? (
-              <ThemedText style={comboStyles.muted}>
-                Too many devices to list all combinations (max {MAX_INVERTER_ENUM_DEVICES}).
-              </ThemedText>
-            ) : allRunnableCombinations.length === 0 ? (
-              <ThemedText style={comboStyles.muted}>
-                No combination satisfies both inverter and energy limits at the same time.
-              </ThemedText>
-            ) : (
-              <>
-                <ThemedText type="defaultSemiBold" style={comboStyles.sectionTitle}>
+          {devices.length === 0 ? (
+            <ThemedText lightColor="#fff" style={comboStyles.muted}>
+              Add devices to see feasible combinations.
+            </ThemedText>
+          ) : runnableCombinationCatalog.noEnergyAvailable ? (
+            <ThemedText lightColor="#fff" style={comboStyles.muted}>
+              Configure battery capacity and SOC to calculate feasible combinations.
+            </ThemedText>
+          ) : runnableCombinationCatalog.tooManyDevices ? (
+            <ThemedText lightColor="#fff" style={comboStyles.muted}>
+              Too many devices to list all combinations (max {MAX_INVERTER_ENUM_DEVICES}).
+            </ThemedText>
+          ) : allRunnableCombinations.length === 0 ? (
+            <ThemedText lightColor="#fff" style={comboStyles.muted}>
+              No combination satisfies both inverter and energy limits at the same time.
+            </ThemedText>
+          ) : (
+            <>
+              <ThemedText type="defaultSemiBold" lightColor="#fff" style={comboStyles.sectionTitle}>
                   Required only ({runnableCombinationCatalog.essentialOnly.length})
                 </ThemedText>
                 {runnableCombinationCatalog.essentialOnly.length === 0 ? (
-                  <ThemedText style={comboStyles.muted}>No required-only feasible combination.</ThemedText>
+                  <ThemedText lightColor="#fff" style={comboStyles.muted}>
+                    No required-only feasible combination.
+                  </ThemedText>
                 ) : (
                   <RunnableComboList
                     combos={runnableCombinationCatalog.essentialOnly}
@@ -178,11 +183,13 @@ export default function FeasibleCombinationsScreen() {
                   />
                 )}
 
-                <ThemedText type="defaultSemiBold" style={comboStyles.sectionTitle}>
-                  Optional only ({runnableCombinationCatalog.optionalOnly.length})
+              <ThemedText type="defaultSemiBold" lightColor="#fff" style={comboStyles.sectionTitle}>
+                Optional only ({runnableCombinationCatalog.optionalOnly.length})
+              </ThemedText>
+              {runnableCombinationCatalog.optionalOnly.length === 0 ? (
+                <ThemedText lightColor="#fff" style={comboStyles.muted}>
+                  No optional-only feasible combination.
                 </ThemedText>
-                {runnableCombinationCatalog.optionalOnly.length === 0 ? (
-                  <ThemedText style={comboStyles.muted}>No optional-only feasible combination.</ThemedText>
                 ) : (
                   <RunnableComboList
                     combos={runnableCombinationCatalog.optionalOnly}
@@ -195,11 +202,13 @@ export default function FeasibleCombinationsScreen() {
                   />
                 )}
 
-                <ThemedText type="defaultSemiBold" style={comboStyles.sectionTitle}>
-                  Required + Optional ({runnableCombinationCatalog.essentialWithOptional.length})
+              <ThemedText type="defaultSemiBold" lightColor="#fff" style={comboStyles.sectionTitle}>
+                Required + Optional ({runnableCombinationCatalog.essentialWithOptional.length})
+              </ThemedText>
+              {runnableCombinationCatalog.essentialWithOptional.length === 0 ? (
+                <ThemedText lightColor="#fff" style={comboStyles.muted}>
+                  No required + optional feasible combination.
                 </ThemedText>
-                {runnableCombinationCatalog.essentialWithOptional.length === 0 ? (
-                  <ThemedText style={comboStyles.muted}>No required + optional feasible combination.</ThemedText>
                 ) : (
                   <RunnableComboList
                     combos={runnableCombinationCatalog.essentialWithOptional}
@@ -211,31 +220,10 @@ export default function FeasibleCombinationsScreen() {
                     onSelect={handleSelectCombination}
                   />
                 )}
-              </>
-            )}
-          </ThemedView>
-        )}
-      </ScrollView>
-    </SafeAreaView>
+            </>
+          )}
+        </View>
+      )}
+    </OnBgScreen>
   );
 }
-
-const styles = StyleSheet.create({
-  safe: { flex: 1 },
-  content: { padding: 16, paddingBottom: 28 },
-  card: {
-    borderWidth: StyleSheet.hairlineWidth,
-    borderRadius: 12,
-    padding: 14,
-    gap: 10,
-    shadowColor: '#000',
-    shadowOpacity: 0.06,
-    shadowRadius: 8,
-    shadowOffset: { width: 0, height: 3 },
-    elevation: 2,
-  },
-  runnableCard: {
-    borderColor: '#7fb87f',
-    backgroundColor: '#f2faf2',
-  },
-});

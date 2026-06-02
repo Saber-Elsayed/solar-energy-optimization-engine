@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useState } from 'react';
-import { ActivityIndicator, Alert, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { ActivityIndicator, Alert, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { CenterAutoToast } from '@/components/center-auto-toast';
+import { OnBgScreen } from '@/components/on-bg-screen';
 import { ThemedText } from '@/components/themed-text';
-import { ThemedView } from '@/components/themed-view';
+import { onBgStyles } from '@/styles/on-bg';
 
 type SolarSystemResponse = {
   id: string;
@@ -142,71 +142,66 @@ export default function SolarSystemSettingsScreen() {
   };
 
   return (
-    <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
-      <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="always">
-        <ThemedView style={styles.card}>
-          <ThemedText type="title">Solar System Settings</ThemedText>
+    <>
+      <OnBgScreen keyboardShouldPersistTaps="always">
+        <View style={onBgStyles.onBgPanel}>
+          <ThemedText type="title" lightColor="#fff" style={onBgStyles.onBgTitle}>
+            Solar System Settings
+          </ThemedText>
 
-          <ThemedText style={styles.label}>Battery Capacity (Wh)</ThemedText>
-          <TextInput style={styles.input} value={batteryCapacityWh} onChangeText={setBatteryCapacityWh} keyboardType="decimal-pad" />
+          <ThemedText lightColor="#fff" style={onBgStyles.onBgLabel}>
+            Battery Capacity (Wh)
+          </ThemedText>
+          <TextInput
+            style={onBgStyles.onBgInput}
+            value={batteryCapacityWh}
+            onChangeText={setBatteryCapacityWh}
+            keyboardType="decimal-pad"
+            placeholderTextColor="rgba(255, 255, 255, 0.55)"
+          />
 
-          <ThemedText style={styles.label}>Inverter Max Power (W)</ThemedText>
-          <TextInput style={styles.input} value={inverterMaxPowerW} onChangeText={setInverterMaxPowerW} keyboardType="decimal-pad" />
+          <ThemedText lightColor="#fff" style={onBgStyles.onBgLabel}>
+            Inverter Max Power (W)
+          </ThemedText>
+          <TextInput
+            style={onBgStyles.onBgInput}
+            value={inverterMaxPowerW}
+            onChangeText={setInverterMaxPowerW}
+            keyboardType="decimal-pad"
+            placeholderTextColor="rgba(255, 255, 255, 0.55)"
+          />
 
           <Pressable
-            style={({ pressed }) => [styles.button, pressed && !saving && styles.buttonPressed, saving && styles.buttonDisabled]}
+            style={({ pressed }) => [
+              onBgStyles.onBgActionButton,
+              styles.saveButton,
+              pressed && !saving && onBgStyles.buttonPressed,
+              saving && styles.buttonDisabled,
+            ]}
             onPress={() => void saveSettings()}
             disabled={saving || profileLoading}
           >
             <View style={styles.buttonInner}>
               {saving ? <ActivityIndicator color="#fff" /> : null}
-              <Text style={styles.buttonText}>
+              <Text style={onBgStyles.onBgActionButtonText}>
                 {saving ? 'Saving...' : hasProfile ? 'Update Settings' : 'Save Settings'}
               </Text>
             </View>
           </Pressable>
-        </ThemedView>
-      </ScrollView>
+        </View>
+      </OnBgScreen>
       <CenterAutoToast feedback={saveFeedback} onDismiss={() => setSaveFeedback(null)} />
-    </SafeAreaView>
+    </>
   );
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1 },
-  content: { padding: 16, paddingBottom: 24 },
-  card: {
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#d8e0ea',
-    backgroundColor: '#f8fbff',
-    borderRadius: 12,
-    padding: 14,
-    gap: 8,
-  },
-  label: { marginTop: 4, fontSize: 14 },
-  input: {
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#c6ced8',
-    backgroundColor: '#fff',
-    borderRadius: 8,
-    paddingHorizontal: 10,
-    paddingVertical: 10,
-    fontSize: 15,
-  },
-  button: {
-    marginTop: 12,
-    backgroundColor: '#0a7ea4',
-    borderRadius: 8,
-    alignItems: 'center',
-    paddingVertical: 12,
-  },
-  buttonPressed: { opacity: 0.85 },
+  saveButton: { alignSelf: 'stretch', marginTop: 12 },
   buttonDisabled: { opacity: 0.72 },
   buttonInner: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
   },
-  buttonText: { color: '#fff', fontSize: 15, fontWeight: '600' },
 });
 

@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, Alert, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { ActivityIndicator, Alert, Platform, Pressable, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
 
 import { CenterAutoToast } from '@/components/center-auto-toast';
+import { OnBgScreen } from '@/components/on-bg-screen';
 import { ThemedText } from '@/components/themed-text';
-import { ThemedView } from '@/components/themed-view';
+import { onBgStyles } from '@/styles/on-bg';
 
 type ApiDevicePayload = {
   name: string;
@@ -275,39 +275,94 @@ export default function ManageDevicesScreen() {
   };
 
   return (
-    <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
-      <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="always">
-        <ThemedView style={styles.card}>
-          <ThemedText type="subtitle">Add / Edit Product</ThemedText>
-          <ThemedText style={styles.note}>Usage Time: HH:MM (05:22) or minutes (30).</ThemedText>
+    <>
+      <OnBgScreen keyboardShouldPersistTaps="always">
+        <View style={onBgStyles.onBgPanel}>
+          <ThemedText type="subtitle" lightColor="#fff" style={onBgStyles.onBgTitle}>
+            Add / Edit Product
+          </ThemedText>
+          <ThemedText lightColor="#fff" style={onBgStyles.onBgMuted}>
+            Usage Time: HH:MM (05:22) or minutes (30).
+          </ThemedText>
 
-          <ThemedText style={styles.label}>Name</ThemedText>
-          <TextInput style={styles.input} value={name} onChangeText={setName} autoCapitalize="words" />
+          <ThemedText lightColor="#fff" style={onBgStyles.onBgLabel}>
+            Name
+          </ThemedText>
+          <TextInput
+            style={onBgStyles.onBgInput}
+            value={name}
+            onChangeText={setName}
+            autoCapitalize="words"
+            placeholderTextColor="rgba(255, 255, 255, 0.55)"
+          />
 
-          <ThemedText style={styles.label}>Power (W)</ThemedText>
-          <TextInput style={styles.input} value={power} onChangeText={setPower} keyboardType="decimal-pad" />
+          <ThemedText lightColor="#fff" style={onBgStyles.onBgLabel}>
+            Power (W)
+          </ThemedText>
+          <TextInput
+            style={onBgStyles.onBgInput}
+            value={power}
+            onChangeText={setPower}
+            keyboardType="decimal-pad"
+            placeholderTextColor="rgba(255, 255, 255, 0.55)"
+          />
 
-          <ThemedText style={styles.label}>Usage Time (HH:MM)</ThemedText>
-          <TextInput style={styles.input} value={duration} onChangeText={setDuration} autoCapitalize="none" />
+          <ThemedText lightColor="#fff" style={onBgStyles.onBgLabel}>
+            Usage Time (HH:MM)
+          </ThemedText>
+          <TextInput
+            style={onBgStyles.onBgInput}
+            value={duration}
+            onChangeText={setDuration}
+            autoCapitalize="none"
+            placeholderTextColor="rgba(255, 255, 255, 0.55)"
+          />
 
-          <ThemedText style={styles.label}>Priority (1-5)</ThemedText>
-          <TextInput style={styles.input} value={priority} onChangeText={setPriority} keyboardType="number-pad" />
+          <ThemedText lightColor="#fff" style={onBgStyles.onBgLabel}>
+            Priority (1-5)
+          </ThemedText>
+          <TextInput
+            style={onBgStyles.onBgInput}
+            value={priority}
+            onChangeText={setPriority}
+            keyboardType="number-pad"
+            placeholderTextColor="rgba(255, 255, 255, 0.55)"
+          />
 
-          <ThemedText style={styles.label}>Start Hour</ThemedText>
-          <TextInput style={styles.input} value={startHour} onChangeText={setStartHour} keyboardType="decimal-pad" />
+          <ThemedText lightColor="#fff" style={onBgStyles.onBgLabel}>
+            Start Hour
+          </ThemedText>
+          <TextInput
+            style={onBgStyles.onBgInput}
+            value={startHour}
+            onChangeText={setStartHour}
+            keyboardType="decimal-pad"
+            placeholderTextColor="rgba(255, 255, 255, 0.55)"
+          />
 
-          <ThemedText style={styles.label}>End Hour</ThemedText>
-          <TextInput style={styles.input} value={endHour} onChangeText={setEndHour} keyboardType="decimal-pad" />
+          <ThemedText lightColor="#fff" style={onBgStyles.onBgLabel}>
+            End Hour
+          </ThemedText>
+          <TextInput
+            style={onBgStyles.onBgInput}
+            value={endHour}
+            onChangeText={setEndHour}
+            keyboardType="decimal-pad"
+            placeholderTextColor="rgba(255, 255, 255, 0.55)"
+          />
 
-          <ThemedView style={styles.switchRow}>
-            <ThemedText style={styles.label}>Mandatory</ThemedText>
+          <View style={styles.switchRow}>
+            <ThemedText lightColor="#fff" style={onBgStyles.onBgLabel}>
+              Mandatory
+            </ThemedText>
             <Switch value={essential} onValueChange={setEssential} />
-          </ThemedView>
+          </View>
 
           <Pressable
             style={({ pressed }) => [
-              styles.primaryButton,
-              pressed && !listActionsLocked && styles.buttonPressed,
+              onBgStyles.onBgActionButton,
+              styles.submitButton,
+              pressed && !listActionsLocked && onBgStyles.buttonPressed,
               listActionsLocked && styles.primaryButtonDisabled,
             ]}
             onPress={() => void submitDevice()}
@@ -315,7 +370,7 @@ export default function ManageDevicesScreen() {
           >
             <View style={styles.primaryButtonInner}>
               {submitting ? <ActivityIndicator color="#fff" /> : null}
-              <Text style={styles.primaryButtonText}>
+              <Text style={onBgStyles.onBgActionButtonText}>
                 {submitting
                   ? isEditing
                     ? 'Saving...'
@@ -329,53 +384,58 @@ export default function ManageDevicesScreen() {
 
           {isEditing && (
             <Pressable
-              style={({ pressed }) => [styles.secondaryButton, pressed && !submitting && styles.buttonPressed]}
+              style={({ pressed }) => [
+                onBgStyles.onBgOutlineButton,
+                pressed && !submitting && onBgStyles.buttonPressed,
+                (submitting || deletingId !== null) && styles.primaryButtonDisabled,
+              ]}
               onPress={() => resetForm()}
               disabled={submitting || deletingId !== null}
             >
-              <Text
-                style={[
-                  styles.secondaryButtonText,
-                  (submitting || deletingId !== null) && styles.secondaryButtonTextDisabled,
-                ]}
-              >
-                Cancel Edit
-              </Text>
+              <Text style={onBgStyles.onBgOutlineButtonText}>Cancel Edit</Text>
             </Pressable>
           )}
-        </ThemedView>
+        </View>
 
-        <ThemedView style={styles.card}>
-          <ThemedText type="subtitle">Products ({devices.length})</ThemedText>
+        <View style={onBgStyles.onBgPanel}>
+          <ThemedText type="subtitle" lightColor="#fff" style={onBgStyles.onBgTitle}>
+            Products ({devices.length})
+          </ThemedText>
           {loadingDevices ? (
-            <ActivityIndicator size="small" color="#0a7ea4" />
+            <ActivityIndicator size="small" color="#ffffff" />
           ) : devices.length === 0 ? (
-            <ThemedText style={styles.muted}>No products saved.</ThemedText>
+            <ThemedText lightColor="#fff" style={onBgStyles.onBgMuted}>
+              No products saved.
+            </ThemedText>
           ) : (
             devices.map((d) => (
-              <ThemedView key={d.id} style={styles.deviceCard}>
-                <ThemedText type="defaultSemiBold">{d.name}</ThemedText>
-                <ThemedText>
+              <View key={d.id} style={onBgStyles.onBgPanelInner}>
+                <ThemedText type="defaultSemiBold" lightColor="#fff" style={onBgStyles.onBgBody}>
+                  {d.name}
+                </ThemedText>
+                <ThemedText lightColor="#fff" style={onBgStyles.onBgMuted}>
                   {d.power} W • {minutesToHHMM(d.duration)} • priority {d.priority}
                 </ThemedText>
-                <ThemedText>
+                <ThemedText lightColor="#fff" style={onBgStyles.onBgMuted}>
                   {d.essential ? 'mandatory' : 'optional'} • {d.startTime}h - {d.endTime}h
                 </ThemedText>
                 <Pressable
                   style={({ pressed }) => [
-                    styles.editButton,
-                    pressed && !listActionsLocked && styles.buttonPressed,
+                    onBgStyles.onBgOutlineButton,
+                    styles.rowButton,
+                    pressed && !listActionsLocked && onBgStyles.buttonPressed,
                     listActionsLocked && styles.rowActionDisabled,
                   ]}
                   onPress={() => startEdit(d)}
                   disabled={listActionsLocked}
                 >
-                  <Text style={styles.editButtonText}>Edit</Text>
+                  <Text style={onBgStyles.onBgOutlineButtonText}>Edit</Text>
                 </Pressable>
                 <Pressable
                   style={({ pressed }) => [
-                    styles.deleteButton,
-                    pressed && !listActionsLocked && styles.buttonPressed,
+                    onBgStyles.onBgDangerButton,
+                    styles.rowButton,
+                    pressed && !listActionsLocked && onBgStyles.buttonPressed,
                     listActionsLocked && styles.rowActionDisabled,
                   ]}
                   onPress={() => void deleteDevice(d.id)}
@@ -383,96 +443,33 @@ export default function ManageDevicesScreen() {
                 >
                   {deletingId === d.id ? (
                     <View style={styles.deleteButtonInner}>
-                      <ActivityIndicator size="small" color="#b1321f" />
-                      <Text style={styles.deleteButtonText}>Deleting...</Text>
+                      <ActivityIndicator size="small" color="#ffe8e4" />
+                      <Text style={onBgStyles.onBgDangerButtonText}>Deleting...</Text>
                     </View>
                   ) : (
-                    <Text style={styles.deleteButtonText}>Delete</Text>
+                    <Text style={onBgStyles.onBgDangerButtonText}>Delete</Text>
                   )}
                 </Pressable>
-              </ThemedView>
+              </View>
             ))
           )}
-        </ThemedView>
-      </ScrollView>
+        </View>
+      </OnBgScreen>
       <CenterAutoToast feedback={toast} onDismiss={() => setToast(null)} />
-    </SafeAreaView>
+    </>
   );
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1 },
-  content: { padding: 16, gap: 14, paddingBottom: 26 },
-  card: {
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#d8e0ea',
-    backgroundColor: '#f8fbff',
-    borderRadius: 12,
-    padding: 14,
-    gap: 8,
-  },
-  note: { fontSize: 13, opacity: 0.8 },
-  label: { marginTop: 4, fontSize: 14 },
-  input: {
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#c6ced8',
-    backgroundColor: '#fff',
-    borderRadius: 8,
-    paddingHorizontal: 10,
-    paddingVertical: 10,
-    fontSize: 15,
-  },
   switchRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 6 },
-  primaryButton: { marginTop: 10, backgroundColor: '#0a7ea4', borderRadius: 8, alignItems: 'center', paddingVertical: 12 },
+  submitButton: { alignSelf: 'stretch', marginTop: 10 },
   primaryButtonDisabled: { opacity: 0.72 },
   primaryButtonInner: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  primaryButtonText: { color: '#fff', fontSize: 15, fontWeight: '600' },
-  secondaryButton: {
-    marginTop: 8,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#0a7ea4',
-    borderRadius: 8,
-    alignItems: 'center',
-    paddingVertical: 11,
-  },
-  secondaryButtonText: { color: '#0a7ea4', fontSize: 15, fontWeight: '600' },
-  secondaryButtonTextDisabled: { opacity: 0.5 },
-  editButton: {
-    alignSelf: 'flex-start',
-    marginTop: 6,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#0a7ea4',
-    borderRadius: 6,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-  },
-  editButtonText: { color: '#0a7ea4', fontWeight: '600' },
+  rowButton: { alignSelf: 'flex-start', marginTop: 6, paddingHorizontal: 12 },
   rowActionDisabled: { opacity: 0.5 },
   deleteButtonInner: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
-  },
-  deleteButton: {
-    alignSelf: 'flex-start',
-    marginTop: 6,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#b1321f',
-    borderRadius: 6,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    backgroundColor: '#ffe9e5',
-  },
-  deleteButtonText: { color: '#b1321f', fontWeight: '700' },
-  buttonPressed: { opacity: 0.85 },
-  muted: { opacity: 0.7 },
-  deviceCard: {
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#d1d9e2',
-    backgroundColor: '#fff',
-    borderRadius: 10,
-    padding: 10,
-    gap: 4,
-    marginTop: 6,
   },
 });
