@@ -1,8 +1,8 @@
 import { useRouter } from 'expo-router';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { AuthScreenBackground, authScreenStyles } from '@/components/auth-screen-background';
 import { useAuth } from '@/contexts/AuthContext';
 import { getFirebaseAuthErrorMessage } from '@/lib/firebase-auth-errors';
 import {
@@ -50,9 +50,7 @@ export default function AdminApprovalsScreen() {
   };
 
   const handleReject = async (firebaseUid: string, email: string) => {
-    const reason =
-      // Using a fixed reason to avoid adding new UI inputs (no redesign).
-      'Rejected by admin';
+    const reason = 'Rejected by admin';
     try {
       await rejectRegistration(firebaseUid, reason);
       setItems((prev) => prev.filter((row) => row.firebase_uid !== firebaseUid));
@@ -72,27 +70,27 @@ export default function AdminApprovalsScreen() {
 
   if (!isAdmin) {
     return (
-      <SafeAreaView style={styles.safe}>
-        <View style={styles.card}>
-          <Text style={styles.title}>Admin access required</Text>
-          <Text style={styles.muted}>Please sign in with an admin account.</Text>
-          <Pressable style={styles.button} onPress={() => router.replace('/login')}>
-            <Text style={styles.buttonText}>Back to login</Text>
+      <AuthScreenBackground>
+        <View style={authScreenStyles.form}>
+          <Text style={authScreenStyles.title}>Admin access required</Text>
+          <Text style={styles.mutedOnDark}>Please sign in with an admin account.</Text>
+          <Pressable style={authScreenStyles.button} onPress={() => router.replace('/login')}>
+            <Text style={authScreenStyles.buttonText}>Back to login</Text>
           </Pressable>
         </View>
-      </SafeAreaView>
+      </AuthScreenBackground>
     );
   }
 
   return (
-    <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
-      <ScrollView contentContainerStyle={styles.container}>
+    <AuthScreenBackground variant="page">
+      <ScrollView contentContainerStyle={styles.container} showsVerticalScrollIndicator={false}>
         <View style={styles.header}>
-          <Text style={styles.title}>Pending approvals</Text>
-          <Text style={styles.muted}>{pendingCount} pending</Text>
+          <Text style={authScreenStyles.title}>Pending approvals</Text>
+          <Text style={styles.mutedOnDark}>{pendingCount} pending</Text>
           <View style={styles.headerRow}>
-            <Pressable style={styles.secondaryButton} onPress={() => void load()} disabled={loading}>
-              <Text style={styles.secondaryButtonText}>Refresh</Text>
+            <Pressable style={authScreenStyles.secondaryButton} onPress={() => void load()} disabled={loading}>
+              <Text style={authScreenStyles.secondaryButtonText}>Refresh</Text>
             </Pressable>
             <Pressable style={styles.secondaryButtonDanger} onPress={() => void handleLogout()}>
               <Text style={styles.secondaryButtonDangerText}>Sign out</Text>
@@ -102,20 +100,18 @@ export default function AdminApprovalsScreen() {
 
         {loading ? (
           <View style={styles.loadingBox}>
-            <ActivityIndicator size="small" color="#0a7ea4" />
-            <Text style={styles.muted}>Loading…</Text>
+            <ActivityIndicator size="small" color="#e0f2fe" />
+            <Text style={styles.mutedOnDark}>Loading…</Text>
           </View>
         ) : pendingCount === 0 ? (
           <View style={styles.card}>
-            <Text style={styles.muted}>No pending users right now.</Text>
+            <Text style={styles.cardText}>No pending users right now.</Text>
           </View>
         ) : (
           items.map((row) => (
             <View key={row.firebase_uid} style={styles.card}>
               <Text style={styles.email}>{row.email}</Text>
-              <Text style={styles.muted}>
-                Requested: {new Date(row.created_at).toLocaleString()}
-              </Text>
+              <Text style={styles.cardMuted}>Requested: {new Date(row.created_at).toLocaleString()}</Text>
               <View style={styles.row}>
                 <Pressable style={styles.approve} onPress={() => void handleApprove(row.firebase_uid, row.email)}>
                   <Text style={styles.approveText}>Approve</Text>
@@ -128,26 +124,26 @@ export default function AdminApprovalsScreen() {
           ))
         )}
       </ScrollView>
-    </SafeAreaView>
+    </AuthScreenBackground>
   );
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: '#fff' },
   container: { padding: 16, gap: 12, paddingBottom: 24 },
   header: { gap: 6, marginBottom: 6 },
   headerRow: { flexDirection: 'row', gap: 10, marginTop: 6, flexWrap: 'wrap' },
-  title: { fontSize: 22, fontWeight: '700', color: '#0f172a' },
-  muted: { color: '#64748b' },
+  mutedOnDark: { color: '#e2e8f0' },
   loadingBox: { flexDirection: 'row', gap: 10, alignItems: 'center', paddingVertical: 10 },
   card: {
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#dbe3ee',
+    borderColor: 'rgba(255, 255, 255, 0.35)',
     borderRadius: 12,
     padding: 14,
     gap: 8,
-    backgroundColor: '#f8fbff',
+    backgroundColor: 'rgba(255, 255, 255, 0.92)',
   },
+  cardText: { color: '#475569' },
+  cardMuted: { color: '#64748b' },
   email: { fontSize: 16, fontWeight: '700', color: '#0a7ea4' },
   row: { flexDirection: 'row', gap: 10, flexWrap: 'wrap' },
   approve: {
@@ -168,27 +164,14 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   rejectText: { color: '#fff', fontWeight: '700' },
-  button: { backgroundColor: '#0a7ea4', borderRadius: 8, paddingVertical: 12, alignItems: 'center' },
-  buttonText: { color: '#fff', fontSize: 16, fontWeight: '600' },
-  secondaryButton: {
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#0a7ea4',
-    borderRadius: 8,
-    alignItems: 'center',
-    paddingVertical: 10,
-    paddingHorizontal: 12,
-    backgroundColor: '#fff',
-  },
-  secondaryButtonText: { color: '#0a7ea4', fontWeight: '700' },
   secondaryButtonDanger: {
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#b91c1c',
+    borderWidth: 1,
+    borderColor: '#fecaca',
     borderRadius: 8,
     alignItems: 'center',
-    paddingVertical: 10,
+    paddingVertical: 12,
     paddingHorizontal: 12,
-    backgroundColor: '#fff',
+    backgroundColor: 'rgba(185, 28, 28, 0.35)',
   },
-  secondaryButtonDangerText: { color: '#b91c1c', fontWeight: '700' },
+  secondaryButtonDangerText: { color: '#fff', fontWeight: '700' },
 });
-

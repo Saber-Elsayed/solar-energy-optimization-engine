@@ -129,7 +129,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
 
       setRegistrationStatus(status.status);
-      setIsApproved(status.approved);
+      setIsApproved(status.status === 'approved' || status.approved);
 
     } catch {
       if (isAllowlistedAdminEmail(firebaseUser.email)) {
@@ -197,15 +197,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     if (currentUser) {
       await loadApprovalState(currentUser);
-      if (currentUser.emailVerified && !isAllowlistedAdminEmail(currentUser.email)) {
-        try {
-          await submitRegistrationRequest();
-          setRegistrationStatus('pending');
-          setIsApproved(false);
-        } catch {
-          // Status may already exist in MongoDB.
-        }
-      }
     }
 
   };
@@ -328,8 +319,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
 
     setRegistrationStatus(status.status);
-    setIsApproved(status.approved);
-    return status.approved;
+    setIsApproved(status.status === 'approved' || status.approved);
+    return status.status === 'approved' || status.approved;
   }, []);
 
   const completeEmailVerification = useCallback(async (): Promise<boolean> => {

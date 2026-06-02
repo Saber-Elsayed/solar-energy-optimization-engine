@@ -1,10 +1,12 @@
 import { useRouter } from 'expo-router';
 import { useState } from 'react';
 import { Alert, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { AuthScreenBackground, authScreenStyles } from '@/components/auth-screen-background';
+import { PasswordInput } from '@/components/password-input';
 import { useAuth } from '@/contexts/AuthContext';
 import { getFirebaseAuthErrorMessage } from '@/lib/firebase-auth-errors';
+import { isValidEmail } from '@/lib/validate-email';
 
 export default function LoginScreen() {
   const router = useRouter();
@@ -13,93 +15,99 @@ export default function LoginScreen() {
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [adminMode, setAdminMode] = useState(false);
+  const [emailError, setEmailError] = useState<string | null>(null);
+  const [passwordError, setPasswordError] = useState<string | null>(null);
 
   const handleLogin = async () => {
-    if (!email.trim() || !password) {
-      Alert.alert('Validation', 'Email and password are required.');
+    setEmailError(null);
+    setPasswordError(null);
+
+    if (!email.trim()) {
+      setEmailError('Email is required.');
       return;
     }
+    if (!isValidEmail(email)) {
+      setEmailError('Please enter a valid email address.');
+      return;
+    }
+    if (!password) {
+      setPasswordError('Password is required.');
+      return;
+    }
+
     setLoading(true);
     try {
       await signIn(email.trim(), password);
-      // Route guard sends unverified users to /verify-email and non-approved users to /pending-approval.
-      // If this is an admin login, we navigate to the approvals screen (guard will also enforce admin role).
-      if (adminMode) {
-        router.replace('/admin-approvals');
-      } else if (isAdmin) {
+      if (adminMode || isAdmin) {
         router.replace('/admin-approvals');
       }
     } catch (err) {
-      Alert.alert('Login failed', getFirebaseAuthErrorMessage(err, 'Unable to sign in.'));
+      const message = getFirebaseAuthErrorMessage(err, 'Unable to sign in.');
+      if (message.toLowerCase().includes('email') && message.toLowerCase().includes('password')) {
+        setPasswordError('Incorrect email or password.');
+      } else if (message.toLowerCase().includes('email')) {
+        setEmailError(message);
+      } else {
+        setPasswordError(message);
+      }
+      Alert.alert('Login failed', message);
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <SafeAreaView style={styles.safe}>
-      <View style={styles.container}>
-        <Text style={styles.title}>Login</Text>
+    <AuthScreenBackground>
+      <View style={authScreenStyles.form}>
+        <Text style={authScreenStyles.title}>Login</Text>
         <TextInput
-          style={styles.input}
+          style={[authScreenStyles.input, emailError ? authScreenStyles.inputError : null]}
           value={email}
-          onChangeText={setEmail}
+          onChangeText={(text) => {
+            setEmail(text);
+            if (emailError) {
+              setEmailError(null);
+            }
+          }}
           placeholder="Email"
           placeholderTextColor="#6b7280"
           autoCapitalize="none"
           keyboardType="email-address"
           autoComplete="email"
         />
-        <TextInput
-          style={styles.input}
+        {emailError ? <Text style={authScreenStyles.errorText}>{emailError}</Text> : null}
+
+        <PasswordInput
+          style={passwordError ? authScreenStyles.inputError : undefined}
           value={password}
-          onChangeText={setPassword}
+          onChangeText={(text) => {
+            setPassword(text);
+            if (passwordError) {
+              setPasswordError(null);
+            }
+          }}
           placeholder="Password"
           placeholderTextColor="#6b7280"
-          secureTextEntry
-          autoCapitalize="none"
           autoComplete="password"
         />
-        <Pressable style={styles.button} onPress={handleLogin} disabled={loading}>
-          <Text style={styles.buttonText}>{loading ? 'Logging in...' : adminMode ? 'Login as admin' : 'Login'}</Text>
+        {passwordError ? <Text style={authScreenStyles.errorText}>{passwordError}</Text> : null}
+
+        <Pressable style={authScreenStyles.button} onPress={() => void handleLogin()} disabled={loading}>
+          <Text style={authScreenStyles.buttonText}>
+            {loading ? 'Logging in...' : adminMode ? 'Login as admin' : 'Login'}
+          </Text>
         </Pressable>
-        <Pressable style={styles.secondaryButton} onPress={() => setAdminMode((value) => !value)} disabled={loading}>
-          <Text style={styles.secondaryButtonText}>{adminMode ? 'User login' : 'Admin login'}</Text>
+        <Pressable
+          style={authScreenStyles.secondaryButton}
+          onPress={() => setAdminMode((value) => !value)}
+          disabled={loading}
+        >
+          <Text style={authScreenStyles.secondaryButtonText}>{adminMode ? 'User login' : 'Admin login'}</Text>
         </Pressable>
         <Pressable onPress={() => router.push('/register')}>
-          <Text style={styles.link}>No account? Register</Text>
+          <Text style={authScreenStyles.link}>No account? Register</Text>
         </Pressable>
       </View>
-    </SafeAreaView>
+    </AuthScreenBackground>
   );
 }
-
-const styles = StyleSheet.create({
-  safe: { flex: 1, justifyContent: 'center', padding: 20, backgroundColor: '#fff' },
-  container: {
-    gap: 12,
-    borderRadius: 10,
-  },
-  title: { fontSize: 24, fontWeight: '700', marginBottom: 8, color: '#0f172a' },
-  input: {
-    borderWidth: 1,
-    borderColor: '#d1d5db',
-    borderRadius: 8,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    backgroundColor: 'rgba(255, 255, 255, 0.95)',
-    color: '#0f172a',
-  },
-  button: { backgroundColor: '#0a7ea4', borderRadius: 8, paddingVertical: 12, alignItems: 'center' },
-  buttonText: { color: '#fff', fontSize: 16, fontWeight: '600' },
-  secondaryButton: {
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#0a7ea4',
-    borderRadius: 8,
-    alignItems: 'center',
-    paddingVertical: 12,
-    backgroundColor: '#fff',
-  },
-  secondaryButtonText: { color: '#0a7ea4', fontSize: 16, fontWeight: '600' },
-  link: { marginTop: 8, color: '#0a7ea4', textAlign: 'center' },
-});
