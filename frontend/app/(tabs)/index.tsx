@@ -1,6 +1,16 @@
 import { useFocusEffect, useRouter } from 'expo-router';
+import { useAuth } from '@/contexts/AuthContext';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, TextInput } from 'react-native';
+import {
+  ActivityIndicator,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+} from 'react-native';
+
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { ThemedText } from '@/components/themed-text';
@@ -449,6 +459,7 @@ function optimizeDevices(
 
 export default function HomeScreen() {
   const router = useRouter();
+  const { logout } = useAuth();
   const previousVoltage = useRef<number | null>(null);
 
   const [devices, setDevices] = useState<ApiDevice[]>([]);
@@ -856,8 +867,17 @@ export default function HomeScreen() {
     void fetchWeather(item.name);
   };
 
+  const handleLogout = async () => {
+    try {
+      await logout();
+      router.replace('/login');
+    } catch {
+      // Route guard redirects to login when auth state clears.
+    }
+  };
+
   return (
-    <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
+    <SafeAreaView style={styles.safeForeground} edges={['top', 'bottom']}>
       <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="always">
         <ThemedView style={styles.topSection}>
           {alerts.length > 0 && (
@@ -902,6 +922,9 @@ export default function HomeScreen() {
           </Pressable>
           <Pressable style={({ pressed }) => [styles.secondaryButton, pressed && styles.buttonPressed]} onPress={() => router.push('/solar-system-settings')}>
             <Text style={styles.secondaryButtonText}>Solar System Settings</Text>
+          </Pressable>
+          <Pressable style={({ pressed }) => [styles.logoutButton, pressed && styles.buttonPressed]} onPress={() => void handleLogout()}>
+            <Text style={styles.logoutButtonText}>Logout</Text>
           </Pressable>
         </ThemedView>
 
@@ -1181,8 +1204,9 @@ export default function HomeScreen() {
 }
 
 const styles = StyleSheet.create({
-  safe: {
+  safeForeground: {
     flex: 1,
+    backgroundColor: '#fff',
   },
   container: {
     padding: 18,
@@ -1196,7 +1220,7 @@ const styles = StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: '#d7deea',
     borderRadius: 12,
-    backgroundColor: '#f8fbff',
+    backgroundColor: 'rgba(248, 251, 255, 0.94)',
     padding: 14,
     gap: 10,
     shadowColor: '#000',
@@ -1227,7 +1251,7 @@ const styles = StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: '#d7deea',
     borderRadius: 12,
-    backgroundColor: '#f8fbff',
+    backgroundColor: 'rgba(248, 251, 255, 0.94)',
     padding: 14,
     gap: 10,
     shadowColor: '#000',
@@ -1238,25 +1262,25 @@ const styles = StyleSheet.create({
   },
   infoBlue: {
     borderColor: '#9ec5f8',
-    backgroundColor: '#eef5ff',
+    backgroundColor: 'rgba(238, 245, 255, 0.94)',
   },
   nightCard: {
     borderColor: '#8a9ab8',
-    backgroundColor: '#eef1f7',
+    backgroundColor: 'rgba(238, 241, 247, 0.94)',
   },
   safeGreen: {
     borderColor: '#9ad3a6',
-    backgroundColor: '#edf9ef',
+    backgroundColor: 'rgba(237, 249, 239, 0.94)',
   },
   infoNeutral: {
     borderColor: '#d7deea',
-    backgroundColor: '#f8fbff',
+    backgroundColor: 'rgba(248, 251, 255, 0.94)',
   },
   alertBanner: {
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: '#d54d38',
     borderRadius: 10,
-    backgroundColor: '#ffe9e5',
+    backgroundColor: 'rgba(255, 233, 229, 0.96)',
     padding: 12,
     gap: 4,
     marginBottom: 10,
@@ -1290,6 +1314,19 @@ const styles = StyleSheet.create({
   },
   secondaryButtonText: {
     color: '#0a7ea4',
+    fontSize: 15,
+    fontWeight: '600',
+  },
+  logoutButton: {
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#c45c4a',
+    borderRadius: 8,
+    alignItems: 'center',
+    paddingVertical: 10,
+    backgroundColor: '#fff',
+  },
+  logoutButtonText: {
+    color: '#b1321f',
     fontSize: 15,
     fontWeight: '600',
   },

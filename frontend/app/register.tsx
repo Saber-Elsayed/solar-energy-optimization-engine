@@ -1,46 +1,38 @@
-import { useState } from 'react';
-import { Alert, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
+import { useState } from 'react';
+import { Alert, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { setAuthToken } from '@/lib/auth';
-
-const REGISTER_URL =
-  Platform.OS === 'android' ? 'http://10.0.2.2:8000/auth/register' : 'http://127.0.0.1:8000/auth/register';
+import { useAuth } from '@/contexts/AuthContext';
+import { getFirebaseAuthErrorMessage } from '@/lib/firebase-auth-errors';
 
 export default function RegisterScreen() {
   const router = useRouter();
-  const [name, setName] = useState('');
-  const [city, setCity] = useState('');
+  const { signUp } = useAuth();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
   const [loading, setLoading] = useState(false);
 
   const handleRegister = async () => {
-    if (!name.trim() || !email.trim() || password.length < 6) {
-      Alert.alert('Validation', 'Name, email, and password (min 6 chars) are required.');
+    if (!email.trim() || !password || !confirmPassword) {
+      Alert.alert('Validation', 'Email, password, and confirm password are required.');
+      return;
+    }
+    if (password.length < 6) {
+      Alert.alert('Validation', 'Password must be at least 6 characters.');
+      return;
+    }
+    if (password !== confirmPassword) {
+      Alert.alert('Validation', 'Passwords do not match.');
       return;
     }
     setLoading(true);
     try {
-      const response = await fetch(REGISTER_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          name: name.trim(),
-          city: city.trim(),
-          email: email.trim(),
-          password,
-        }),
-      });
-      const payload = await response.json();
-      if (!response.ok) {
-        throw new Error(payload?.detail ?? 'Registration failed');
-      }
-      await setAuthToken(payload.access_token);
-      router.replace('/(tabs)');
+      await signUp(email.trim(), password);
+      router.replace('/verify-email');
     } catch (err) {
-      Alert.alert('Registration failed', err instanceof Error ? err.message : 'Unknown error');
+      Alert.alert('Registration failed', getFirebaseAuthErrorMessage(err, 'Unable to create account.'));
     } finally {
       setLoading(false);
     }
@@ -50,16 +42,35 @@ export default function RegisterScreen() {
     <SafeAreaView style={styles.safe}>
       <View style={styles.container}>
         <Text style={styles.title}>Register</Text>
-        <TextInput style={styles.input} value={name} onChangeText={setName} placeholder="Name" />
-        <TextInput style={styles.input} value={city} onChangeText={setCity} placeholder="City" />
-        <TextInput style={styles.input} value={email} onChangeText={setEmail} placeholder="Email" autoCapitalize="none" />
+        <TextInput
+          style={styles.input}
+          value={email}
+          onChangeText={setEmail}
+          placeholder="Email"
+          placeholderTextColor="#6b7280"
+          autoCapitalize="none"
+          keyboardType="email-address"
+          autoComplete="email"
+        />
         <TextInput
           style={styles.input}
           value={password}
           onChangeText={setPassword}
           placeholder="Password"
+          placeholderTextColor="#6b7280"
           secureTextEntry
           autoCapitalize="none"
+          autoComplete="new-password"
+        />
+        <TextInput
+          style={styles.input}
+          value={confirmPassword}
+          onChangeText={setConfirmPassword}
+          placeholder="Confirm Password"
+          placeholderTextColor="#6b7280"
+          secureTextEntry
+          autoCapitalize="none"
+          autoComplete="new-password"
         />
         <Pressable style={styles.button} onPress={handleRegister} disabled={loading}>
           <Text style={styles.buttonText}>{loading ? 'Registering...' : 'Register'}</Text>
@@ -73,12 +84,22 @@ export default function RegisterScreen() {
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, justifyContent: 'center', padding: 20 },
-  container: { gap: 12 },
-  title: { fontSize: 24, fontWeight: '700', marginBottom: 8 },
-  input: { borderWidth: 1, borderColor: '#ccc', borderRadius: 8, paddingHorizontal: 12, paddingVertical: 10 },
+  safe: { flex: 1, justifyContent: 'center', padding: 20, backgroundColor: '#fff' },
+  container: {
+    gap: 12,
+    borderRadius: 10,
+  },
+  title: { fontSize: 24, fontWeight: '700', marginBottom: 8, color: '#0f172a' },
+  input: {
+    borderWidth: 1,
+    borderColor: '#d1d5db',
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    backgroundColor: 'rgba(255, 255, 255, 0.95)',
+    color: '#0f172a',
+  },
   button: { backgroundColor: '#0a7ea4', borderRadius: 8, paddingVertical: 12, alignItems: 'center' },
   buttonText: { color: '#fff', fontSize: 16, fontWeight: '600' },
-  link: { marginTop: 8, color: '#0a7ea4' },
+  link: { marginTop: 8, color: '#0a7ea4', textAlign: 'center' },
 });
-
