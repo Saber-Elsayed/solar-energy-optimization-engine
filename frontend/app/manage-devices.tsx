@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, Alert, Platform, Pressable, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Alert, Pressable, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
 
 import { CenterAutoToast } from '@/components/center-auto-toast';
 import { OnBgScreen } from '@/components/on-bg-screen';
 import { ThemedText } from '@/components/themed-text';
+import { DEVICES_URL } from '@/lib/api-config';
 import { onBgStyles } from '@/styles/on-bg';
 
 type ApiDevicePayload = {
@@ -34,8 +35,6 @@ type DeviceRow = {
   startTime: string;
   endTime: string;
 };
-
-const DEVICES_URL = Platform.OS === 'android' ? 'http://10.0.2.2:8000/devices' : 'http://127.0.0.1:8000/devices';
 
 const PRODUCT_SAVE_FAILURE_MESSAGE = 'Failed to save product. Please try again.';
 const PRODUCT_DELETE_FAILURE_MESSAGE = 'Failed to delete product. Please try again.';

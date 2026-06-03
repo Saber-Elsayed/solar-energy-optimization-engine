@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useState } from 'react';
-import { ActivityIndicator, Alert, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { CenterAutoToast } from '@/components/center-auto-toast';
 import { OnBgScreen } from '@/components/on-bg-screen';
 import { ThemedText } from '@/components/themed-text';
+import { SOLAR_SYSTEM_URL } from '@/lib/api-config';
 import { onBgStyles } from '@/styles/on-bg';
 
 type SolarSystemResponse = {
@@ -22,9 +23,6 @@ type SolarSystemSaveResponse = {
 };
 
 type SaveFeedback = { kind: 'success' | 'error'; message: string };
-
-const SOLAR_SYSTEM_URL =
-  Platform.OS === 'android' ? 'http://10.0.2.2:8000/solar-system' : 'http://127.0.0.1:8000/solar-system';
 
 const SAVE_FAILURE_MESSAGE = 'Failed to save solar system settings. Please try again.';
 
