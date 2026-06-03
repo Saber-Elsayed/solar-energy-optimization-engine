@@ -133,7 +133,7 @@ export default function FeasibleCombinationsScreen() {
   };
 
   return (
-    <OnBgScreen>
+    <OnBgScreen variant="solar">
       {loading ? (
         <ActivityIndicator size="large" color="#ffffff" />
       ) : (

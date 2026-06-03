@@ -32,6 +32,14 @@ const stackScreenOptions = {
   headerShadowVisible: false,
 } as const;
 
+const solarStackScreenOptions = {
+  contentStyle: { backgroundColor: 'transparent' },
+  headerStyle: { backgroundColor: 'rgba(0, 0, 0, 0.35)' },
+  headerTintColor: '#fff',
+  headerTitleStyle: { color: '#fff' },
+  headerShadowVisible: false,
+} as const;
+
 function RootNavigator() {
   const colorScheme = useColorScheme();
   const navigationTheme = useMemo(
@@ -120,15 +128,27 @@ function RootNavigator() {
           <Stack.Screen name="admin-approvals" options={{ headerShown: false, contentStyle: { flex: 1 } }} />
           <Stack.Screen name="manage-devices" options={{ title: 'Manage Electrical Devices' }} />
           <Stack.Screen name="solar-system-settings" options={{ title: 'Solar System Settings' }} />
-          <Stack.Screen name="constraint-combinations" options={{ title: 'Constraint Combinations' }} />
-          <Stack.Screen name="devices-overview" options={{ title: 'Devices Overview' }} />
-          <Stack.Screen name="feasible-combinations" options={{ title: 'Feasible Combinations' }} />
+          <Stack.Screen
+            name="constraint-combinations"
+            options={{ title: 'Inverter & Battery Catalog', ...solarStackScreenOptions }}
+          />
+          <Stack.Screen
+            name="devices-overview"
+            options={{ title: 'Devices Overview', ...solarStackScreenOptions }}
+          />
+          <Stack.Screen
+            name="feasible-combinations"
+            options={{ title: 'Feasible Combinations', ...solarStackScreenOptions }}
+          />
           <Stack.Screen name="night-plan" options={{ title: 'Night Discharge Plan' }} />
-          <Stack.Screen name="twelve-hour-forecast" options={{ title: '12-Hour Run Forecast' }} />
+          <Stack.Screen
+            name="twelve-hour-forecast"
+            options={{ title: '12-Hour Run Forecast', ...solarStackScreenOptions }}
+          />
           <Stack.Screen name="modal" options={{ presentation: 'modal', title: 'Modal' }} />
         </Stack>
       </AppBackground>
-      <StatusBar style="light" />
+      <StatusBar style="auto" />
     </ThemeProvider>
   );
 }

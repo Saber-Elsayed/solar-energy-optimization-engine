@@ -2,6 +2,7 @@ import type { ReactNode } from 'react';
 import { StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { SolarImageBackground } from '@/components/solar-image-background';
 import { onBgStyles } from '@/styles/on-bg';
 
 type AuthScreenBackgroundProps = {
@@ -10,14 +11,16 @@ type AuthScreenBackgroundProps = {
   variant?: 'form' | 'page';
 };
 
-/** Layout wrapper for auth screens; global background is provided by AppBackground in root layout. */
+/** Layout wrapper for login, register, admin, and related entry screens. */
 export function AuthScreenBackground({ children, variant = 'form' }: AuthScreenBackgroundProps) {
   const isPage = variant === 'page';
 
   return (
-    <SafeAreaView style={isPage ? styles.safePage : styles.safeForm} edges={['top', 'bottom']}>
-      <View style={isPage ? styles.pageContainer : styles.formContainer}>{children}</View>
-    </SafeAreaView>
+    <SolarImageBackground>
+      <SafeAreaView style={isPage ? styles.safePage : styles.safeForm} edges={['top', 'bottom']}>
+        <View style={isPage ? styles.pageContainer : styles.formContainer}>{children}</View>
+      </SafeAreaView>
+    </SolarImageBackground>
   );
 }
 

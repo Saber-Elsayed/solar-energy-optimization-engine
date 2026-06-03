@@ -47,7 +47,7 @@ export default function DevicesOverviewScreen() {
   const enabledCount = devices.filter((device) => isDeviceEnabled(device.id)).length;
 
   return (
-    <OnBgScreen>
+    <OnBgScreen variant="solar">
       <View style={onBgStyles.onBgPanel}>
         <ThemedText type="subtitle" lightColor="#fff" style={onBgStyles.onBgTitle}>
           Saved Devices ({devices.length})
