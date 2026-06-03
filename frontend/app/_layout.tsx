@@ -25,10 +25,10 @@ function transparentNavigationTheme(base: Theme): Theme {
 }
 
 const stackScreenOptions = {
-  contentStyle: { backgroundColor: 'transparent' },
-  headerStyle: { backgroundColor: 'rgba(0, 0, 0, 0.35)' },
-  headerTintColor: '#fff',
-  headerTitleStyle: { color: '#fff' },
+  contentStyle: { backgroundColor: '#F4F4F5' },
+  headerStyle: { backgroundColor: '#FFFFFF' },
+  headerTintColor: '#18181B',
+  headerTitleStyle: { color: '#18181B' },
   headerShadowVisible: false,
 } as const;
 
