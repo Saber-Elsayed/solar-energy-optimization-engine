@@ -64,12 +64,12 @@ export default function SettingsScreen() {
         </View>
       </Card>
 
-      <Card onPress={() => router.push('/feasible-combinations')}>
+      <Card onPress={() => router.push('/free-plan')}>
         <View style={styles.linkRow}>
           <Ionicons name="git-branch-outline" size={22} color={colors.primary} />
           <View style={styles.linkText}>
-            <HeadingText>Feasible Combinations</HeadingText>
-            <CaptionText>Full catalog and plan selection</CaptionText>
+            <HeadingText>Free plan</HeadingText>
+            <CaptionText>Inverter-only runs with timed auto-off</CaptionText>
           </View>
           <Ionicons name="chevron-forward" size={18} color={colors.textMuted} />
         </View>

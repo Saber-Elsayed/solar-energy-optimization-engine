@@ -6,6 +6,7 @@ import { ActivityIndicator, StyleSheet, View } from 'react-native';
 import 'react-native-reanimated';
 
 import { AppBackground } from '@/components/app-background';
+import { AppDataProvider } from '@/contexts/AppDataContext';
 import { AuthProvider, useAuth } from '@/contexts/AuthContext';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 
@@ -129,8 +130,14 @@ function RootNavigator() {
           <Stack.Screen name="pending-approval" options={{ headerShown: false, contentStyle: { flex: 1 } }} />
           <Stack.Screen name="admin-approvals" options={{ headerShown: false, contentStyle: { flex: 1 } }} />
           <Stack.Screen name="admin-logs" options={{ headerShown: false, contentStyle: { flex: 1 } }} />
-          <Stack.Screen name="manage-devices" options={{ title: 'Manage Electrical Devices' }} />
-          <Stack.Screen name="solar-system-settings" options={{ title: 'Solar System Settings' }} />
+          <Stack.Screen
+            name="manage-devices"
+            options={{ title: 'Manage Electrical Devices', ...solarStackScreenOptions }}
+          />
+          <Stack.Screen
+            name="solar-system-settings"
+            options={{ title: 'Solar System Settings', ...solarStackScreenOptions }}
+          />
           <Stack.Screen
             name="constraint-combinations"
             options={{ title: 'Inverter & Battery Catalog', ...solarStackScreenOptions }}
@@ -140,10 +147,21 @@ function RootNavigator() {
             options={{ title: 'Devices Overview', ...solarStackScreenOptions }}
           />
           <Stack.Screen
-            name="feasible-combinations"
-            options={{ title: 'Feasible Combinations', ...solarStackScreenOptions }}
+            name="free-plan"
+            options={{ title: 'Free Plan', ...solarStackScreenOptions }}
           />
-          <Stack.Screen name="night-plan" options={{ title: 'Night Discharge Plan' }} />
+          <Stack.Screen
+            name="feasible-combinations"
+            options={{ title: 'Free Plan', ...solarStackScreenOptions }}
+          />
+          <Stack.Screen
+            name="night-plan"
+            options={{ title: 'Night Discharge Plan', ...solarStackScreenOptions }}
+          />
+          <Stack.Screen
+            name="day-plan"
+            options={{ title: 'Day Plan', ...solarStackScreenOptions }}
+          />
           <Stack.Screen
             name="twelve-hour-forecast"
             options={{ title: '12-Hour Run Forecast', ...solarStackScreenOptions }}
@@ -159,7 +177,9 @@ function RootNavigator() {
 export default function RootLayout() {
   return (
     <AuthProvider>
-      <RootNavigator />
+      <AppDataProvider>
+        <RootNavigator />
+      </AppDataProvider>
     </AuthProvider>
   );
 }

@@ -365,7 +365,11 @@ export default function TwelveHourForecastScreen() {
                     ? ' (OR-Tools)'
                     : selectedRunningPlan.source === 'night-plan'
                       ? ' (Night plan)'
-                      : ''}
+                      : selectedRunningPlan.source === 'day-plan'
+                        ? ' (Day plan)'
+                        : selectedRunningPlan.source === 'free-plan'
+                          ? ' (Free plan)'
+                          : ''}
                   :{' '}
                   {selectedRunningPlan.summary}
                 </ThemedText>
@@ -382,7 +386,7 @@ export default function TwelveHourForecastScreen() {
               </>
             ) : (
               <ThemedText lightColor="#fff" style={comboStyles.muted}>
-                No running plan selected. Select a plan on Feasible Combinations or OR-Tools Best Plan. Showing solar
+                No running plan selected. Use Free plan, OR-Tools, or automatic day/night plans. Showing solar
                 recharge only (no device load).
               </ThemedText>
             )}

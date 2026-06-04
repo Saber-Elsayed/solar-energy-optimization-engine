@@ -4,14 +4,12 @@ import React from 'react';
 import { StyleSheet, View } from 'react-native';
 
 import { HapticTab } from '@/components/haptic-tab';
-import { AppDataProvider } from '@/contexts/AppDataContext';
 import { colors } from '@/constants/theme';
 
 export default function TabLayout() {
   return (
-    <AppDataProvider>
-      <View style={styles.shell}>
-        <Tabs
+    <View style={styles.shell}>
+      <Tabs
           screenOptions={{
             headerShown: false,
             tabBarActiveTintColor: colors.primary,
@@ -58,8 +56,7 @@ export default function TabLayout() {
             }}
           />
         </Tabs>
-      </View>
-    </AppDataProvider>
+    </View>
   );
 }
 

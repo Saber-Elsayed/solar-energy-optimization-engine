@@ -3,9 +3,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
   CITIES_URL,
+  DAY_WINDOW_URL,
   DEFAULT_INVERTER_MAX_POWER_W,
   DEVICES_URL,
   ENERGY_LATEST_URL,
+  NIGHT_WINDOW_URL,
   OPTIMIZE_BEST_URL,
   OPTIMIZE_URL,
   SOLAR_SYSTEM_URL,
@@ -25,6 +27,14 @@ import {
   subscribeFeasibleSelection,
 } from "@/lib/feasible-selection-store";
 import {
+  getLastDaylightMinutes,
+  hydrateDayPlanStore,
+  isDayPlanDeviceEnabled,
+  isDayPlanModeActive,
+  isDaySetupComplete,
+  subscribeDayPlanStore,
+} from "@/lib/day-plan-store";
+import {
   getLastNightDarknessMinutes,
   hydrateNightPlanStore,
   isNightPlanDeviceEnabled,
@@ -32,6 +42,11 @@ import {
   isNightSetupComplete,
   subscribeNightPlanStore,
 } from "@/lib/night-plan-store";
+import { hydrateAlwaysOnStore } from "@/lib/always-on-store";
+import {
+  hydrateDayPlanEssentialsStore,
+  isDayBasicDevice,
+} from "@/lib/day-plan-essentials-store";
 import {
   buildDevicesCatalogSignature,
   buildRunnableCombinationCatalog,
@@ -48,12 +63,38 @@ import {
 } from "@/lib/running-plan";
 import { buildTwelveHourRunForecast } from "@/lib/twelve-hour-run-forecast";
 import { logUserActivity } from "@/lib/activity-log";
+import {
+  availableEnergyFromSoc,
+  hasControllerSocReport,
+  parseControllerSocPercent,
+  resolveSocPercent,
+} from "@/lib/battery-soc";
+import {
+  computeTwelveHourOutlook,
+  type TwelveHourOutlook,
+} from "@/lib/twelve-hour-outlook";
+import {
+  getFreePlanRemainingMs,
+  getFreePlanSessionDeviceIds,
+  hydrateFreePlanStore,
+  isFreePlanSessionActive,
+  subscribeFreePlanStore,
+} from "@/lib/free-plan-store";
+import { tickPlanOrchestrator } from "@/lib/plan-orchestrator";
+import {
+  setCachedDayWindow,
+  setCachedNightWindow,
+  type CachedDayWindow,
+  type CachedNightWindow,
+} from "@/lib/plan-window-store";
 import { useEnabledDevices } from "@/lib/use-enabled-devices";
 
 export type EnergyDataItem = {
   voltage?: number;
   current?: number;
   soc?: number;
+  /** Battery temperature (°C) from controller; defaults to 0 when omitted */
+  battery_temperature?: number;
 };
 
 export type OptimizeWeather = {
@@ -73,7 +114,7 @@ type SolarSystemProfileResponse = {
   inverter_max_power_w: number;
 };
 
-const POLL_INTERVAL_MS = 50000;
+const DASHBOARD_POLL_INTERVAL_MS = 50000;
 
 export function useDashboardState() {
   const [devices, setDevices] = useState<ApiDevice[]>([]);
@@ -107,33 +148,63 @@ export function useDashboardState() {
   const [orBestLoading, setOrBestLoading] = useState(false);
   const [orBestError, setOrBestError] = useState<string | null>(null);
   const [nightPlanUiRevision, setNightPlanUiRevision] = useState(0);
+  const [dayPlanUiRevision, setDayPlanUiRevision] = useState(0);
+  const [freePlanUiRevision, setFreePlanUiRevision] = useState(0);
+  const cityRef = useRef(city);
+  cityRef.current = city;
+  const devicesRef = useRef(devices);
+  devicesRef.current = devices;
+  const orBestDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const forecastDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const nightPlanCardHint = useMemo(() => {
     if (!isNightSetupComplete()) {
       return "Set up home size and essential products · discharge only until sunrise";
     }
     if (isNightPlanModeActive()) {
-      return "Night plan active · Tap to manage or exit to normal mode";
+      return "Night plan active (auto after sunset) · Tap to manage";
     }
-    return "Normal mode · Tap to enter night plan";
+    return "Tap to configure night plan · runs automatically after sunset";
   }, [nightPlanUiRevision]);
 
-  const soc = typeof battery?.soc === "number" ? battery.soc : null;
+  const dayPlanCardHint = useMemo(() => {
+    if (!isDaySetupComplete()) {
+      return "Set up home size and daytime products · sunrise to sunset with solar charging";
+    }
+    if (isDayPlanModeActive()) {
+      return "Day plan active (auto in daylight) · Tap to manage loads";
+    }
+    return "Tap to configure day plan · runs automatically sunrise–sunset";
+  }, [dayPlanUiRevision]);
+
+  const rawSoc =
+    typeof battery?.soc === "number" ? battery.soc : null;
+  const soc = resolveSocPercent(rawSoc);
+  const socFromController = hasControllerSocReport(rawSoc);
   const voltage = typeof battery?.voltage === "number" ? battery.voltage : 0;
   const current = typeof battery?.current === "number" ? battery.current : 0;
-  const socNormalized = useMemo(() => (soc !== null ? soc / 100 : 0), [soc]);
-  const availableEnergyWh = useMemo(() => {
-    if (soc !== null) {
-      return batteryCapacityWhValue * socNormalized;
-    }
-    return batteryCapacityWhValue;
-  }, [batteryCapacityWhValue, soc, socNormalized]);
+  const batteryTemperature =
+    typeof battery?.battery_temperature === "number" &&
+    !Number.isNaN(battery.battery_temperature)
+      ? battery.battery_temperature
+      : 0;
+  const availableEnergyWh = useMemo(
+    () =>
+      availableEnergyFromSoc(
+        parseControllerSocPercent(rawSoc),
+        batteryCapacityWhValue,
+      ),
+    [rawSoc, batteryCapacityWhValue],
+  );
 
   const optimization = useMemo(
     () =>
       optimizeDevices(activeDevices, availableEnergyWh, inverterMaxPowerWValue),
     [activeDevices, availableEnergyWh, inverterMaxPowerWValue],
   );
+  const optimizationRef = useRef(optimization);
+  optimizationRef.current = optimization;
+  const didInitialOrFetchRef = useRef(false);
 
   const runnableCombinationCatalog = useMemo(
     () =>
@@ -163,6 +234,32 @@ export function useDashboardState() {
     return devices.filter((device) => isNightPlanDeviceEnabled(device.id));
   }, [devices, nightPlanUiRevision]);
 
+  const daylightMinutes = getLastDaylightMinutes();
+  const activeFreePlanDevices = useMemo(() => {
+    void freePlanUiRevision;
+    if (!isFreePlanSessionActive()) {
+      return [];
+    }
+    const ids = new Set(getFreePlanSessionDeviceIds());
+    return devices.filter((device) => ids.has(device.id));
+  }, [devices, freePlanUiRevision]);
+
+  const activeDayPlanDevices = useMemo(() => {
+    void dayPlanUiRevision;
+    if (!isDayPlanModeActive()) {
+      return [];
+    }
+    const enabled = devices.filter((device) => isDayPlanDeviceEnabled(device.id));
+    return [...enabled].sort((a, b) => {
+      const aBasic = isDayBasicDevice(a.id) ? 1 : 0;
+      const bBasic = isDayBasicDevice(b.id) ? 1 : 0;
+      if (aBasic !== bBasic) {
+        return bBasic - aBasic;
+      }
+      return (b.priority ?? 0) - (a.priority ?? 0);
+    });
+  }, [devices, dayPlanUiRevision]);
+
   const selectedRunningPlan = useMemo(
     () =>
       resolveSelectedRunningPlan({
@@ -172,6 +269,9 @@ export function useDashboardState() {
         activeDevices,
         nightPlanDevices: activeNightPlanDevices,
         nightDarknessMinutes,
+        dayPlanDevices: activeDayPlanDevices,
+        daylightMinutes,
+        freePlanDevices: activeFreePlanDevices,
       }),
     [
       runningPlanSelection,
@@ -180,7 +280,12 @@ export function useDashboardState() {
       activeDevices,
       activeNightPlanDevices,
       nightDarknessMinutes,
+      activeDayPlanDevices,
+      daylightMinutes,
+      activeFreePlanDevices,
       nightPlanUiRevision,
+      dayPlanUiRevision,
+      freePlanUiRevision,
     ],
   );
 
@@ -201,6 +306,22 @@ export function useDashboardState() {
     forecastPoints,
   ]);
 
+  /** Always-on dashboard metric: hourly solar recharge + SOC, 12h horizon */
+  const twelveHourOutlook = useMemo((): TwelveHourOutlook => {
+    const loadW = selectedRunningPlan?.totalPowerW ?? 0;
+    return computeTwelveHourOutlook({
+      totalPowerW: loadW,
+      initialBatteryWh: availableEnergyWh,
+      batteryCapacityWh: batteryCapacityWhValue,
+      forecastPoints,
+    });
+  }, [
+    selectedRunningPlan,
+    availableEnergyWh,
+    batteryCapacityWhValue,
+    forecastPoints,
+  ]);
+
   const twelveHourRunForecast = useMemo(
     () =>
       buildTwelveHourRunForecast(allRunnableCombinations, {
@@ -217,6 +338,11 @@ export function useDashboardState() {
   );
 
   const isOrPlanSelected = runningPlanSelection?.kind === "or-tools";
+  const isFreePlanActive = useMemo(() => {
+    void freePlanUiRevision;
+    return isFreePlanSessionActive();
+  }, [freePlanUiRevision]);
+  const freePlanRemainingMs = isFreePlanActive ? getFreePlanRemainingMs() : 0;
   const displayCity = weather?.city ?? selectedCity?.name ?? city;
 
   useFocusEffect(
@@ -227,13 +353,30 @@ export function useDashboardState() {
   );
 
   useEffect(() => {
-    void hydrateNightPlanStore().then(() => {
+    void (async () => {
+      await Promise.all([
+        hydrateNightPlanStore(),
+        hydrateDayPlanStore(),
+        hydrateAlwaysOnStore(),
+        hydrateDayPlanEssentialsStore(),
+      ]);
+      await hydrateFreePlanStore();
       setRunningPlanSelection(getRunningPlanSelection());
-    });
-    return subscribeNightPlanStore(() => {
+      setFreePlanUiRevision((v) => v + 1);
+      tickPlanOrchestrator();
+    })();
+    const unsubNight = subscribeNightPlanStore(() => {
       setNightPlanUiRevision((value) => value + 1);
       setRunningPlanSelection(getRunningPlanSelection());
     });
+    const unsubDay = subscribeDayPlanStore(() => {
+      setDayPlanUiRevision((value) => value + 1);
+      setRunningPlanSelection(getRunningPlanSelection());
+    });
+    return () => {
+      unsubNight();
+      unsubDay();
+    };
   }, []);
 
   useEffect(() => {
@@ -335,36 +478,37 @@ export function useDashboardState() {
     deviceList: ApiDevice[],
   ) => {
     const dynamicAlerts: string[] = [];
-    const socValue = typeof latestSoc === "number" ? latestSoc : null;
+    const controllerSoc = parseControllerSocPercent(latestSoc);
     const nextHourUsageWh = deviceList.reduce(
       (sum, d) => sum + d.power * (d.duration / 60),
       0,
     );
 
-    if (socValue !== null && socValue < 25) {
+    if (controllerSoc !== null && controllerSoc < 25) {
       dynamicAlerts.push("Low battery level");
     }
     if (
-      socValue !== null &&
-      socValue < 35 &&
+      controllerSoc !== null &&
+      controllerSoc < 35 &&
       nextHourUsageWh > latestAvailableEnergyWh
     ) {
       dynamicAlerts.push("High usage may drain battery soon");
     }
     if (
-      socValue !== null &&
+      controllerSoc !== null &&
       latestAvailableEnergyWh > 0 &&
       nextHourUsageWh > latestAvailableEnergyWh
     ) {
       dynamicAlerts.push("Risk of battery depletion");
     }
-    if (optimization.blockedMandatoryCount > 0) {
+    const opt = optimizationRef.current;
+    if (opt.blockedMandatoryCount > 0) {
       dynamicAlerts.push("Not enough energy for required devices");
     }
-    if (optimization.blockedOptionalCount > 0) {
+    if (opt.blockedOptionalCount > 0) {
       dynamicAlerts.push("Optional devices limited due to energy constraints");
     }
-    const blockedByInverter = optimization.blocked.some((item) =>
+    const blockedByInverter = opt.blocked.some((item) =>
       item.reason?.includes("exceeds inverter limit"),
     );
     if (blockedByInverter) {
@@ -426,8 +570,11 @@ export function useDashboardState() {
     }
   };
 
-  const fetchDashboardData = async () => {
+  const fetchDashboardDataRef = useRef<() => Promise<void>>(async () => {});
+
+  fetchDashboardDataRef.current = async () => {
     try {
+      await hydrateFreePlanStore();
       let capacityWhForCalc = batteryCapacityWhRef.current;
       let inverterMaxPowerWForCalc = inverterMaxPowerWRef.current;
 
@@ -490,31 +637,79 @@ export function useDashboardState() {
       }
       if (energyRes?.ok) {
         const latest = (await energyRes.json()) as EnergyDataItem;
-        const latestSoc =
-          typeof latest?.soc === "number" ? latest.soc : undefined;
-        const latestSocNormalized =
-          typeof latestSoc === "number" ? latestSoc / 100 : 0;
-        const latestAvailableEnergyWh =
-          typeof latestSoc === "number"
-            ? capacityWhForCalc * latestSocNormalized
-            : capacityWhForCalc;
+        const latestRawSoc =
+          typeof latest?.soc === "number" ? latest.soc : null;
+        const latestAvailableEnergyWh = availableEnergyFromSoc(
+          parseControllerSocPercent(latestRawSoc),
+          capacityWhForCalc,
+        );
         setBattery(latest);
         evaluateAlerts(
-          latest?.soc,
+          latestRawSoc ?? undefined,
           latestAvailableEnergyWh,
           filterEnabledDevices(latestDevices),
         );
       }
 
+      const targetCity = cityRef.current.trim() || "Tel Aviv";
+      try {
+        const [dayRes, nightRes] = await Promise.all([
+          fetch(
+            `${DAY_WINDOW_URL}?city=${encodeURIComponent(targetCity)}&t=${Date.now()}`,
+          ),
+          fetch(
+            `${NIGHT_WINDOW_URL}?city=${encodeURIComponent(targetCity)}&t=${Date.now()}`,
+          ),
+        ]);
+        if (dayRes.ok) {
+          setCachedDayWindow((await dayRes.json()) as CachedDayWindow);
+        }
+        if (nightRes.ok) {
+          setCachedNightWindow((await nightRes.json()) as CachedNightWindow);
+        }
+      } catch {
+        // keep cached windows
+      }
+
       const enabledDevices = filterEnabledDevices(latestDevices);
-      void fetchOrBestCombination(enabledDevices, city.trim() || "Tel Aviv");
-      void fetchForecastPoints(enabledDevices, city.trim() || "Tel Aviv");
+      if (forecastDebounceRef.current) {
+        clearTimeout(forecastDebounceRef.current);
+      }
+      forecastDebounceRef.current = setTimeout(() => {
+        void fetchForecastPoints(enabledDevices, targetCity);
+      }, 800);
+
+      if (!didInitialOrFetchRef.current && enabledDevices.length > 0) {
+        didInitialOrFetchRef.current = true;
+        void fetchOrBestCombination(enabledDevices, targetCity);
+      }
+
+      const tickResult = tickPlanOrchestrator();
+      if (tickResult.type === "free_plan_ended") {
+        setAlerts((prev) => [
+          ...prev,
+          "Free plan finished — devices turned off. Previous plan resumed when applicable.",
+        ]);
+        setFreePlanUiRevision((v) => v + 1);
+      }
+      if (
+        tickResult.type !== "idle" &&
+        tickResult.type !== "free_plan_active"
+      ) {
+        setNightPlanUiRevision((v) => v + 1);
+        setDayPlanUiRevision((v) => v + 1);
+      }
+      setRunningPlanSelection(getRunningPlanSelection());
     } catch {
       // Network unreachable.
     } finally {
       setLoading(false);
     }
   };
+
+  const fetchDashboardData = useCallback(async () => {
+    await fetchDashboardDataRef.current();
+  }, []);
 
   const runOptimization = useCallback(() => {
     const targetCity = city.trim() || "Tel Aviv";
@@ -608,18 +803,56 @@ export function useDashboardState() {
 
   useEffect(() => {
     return subscribeDeviceEnabled(() => {
-      const enabledDevices = filterEnabledDevices(devices);
-      void fetchOrBestCombination(enabledDevices, city.trim() || "Tel Aviv");
-      void fetchForecastPoints(enabledDevices, city.trim() || "Tel Aviv");
+      if (orBestDebounceRef.current) {
+        clearTimeout(orBestDebounceRef.current);
+      }
+      orBestDebounceRef.current = setTimeout(() => {
+        const enabledDevices = filterEnabledDevices(devicesRef.current);
+        const targetCity = cityRef.current.trim() || "Tel Aviv";
+        void fetchOrBestCombination(enabledDevices, targetCity);
+        void fetchForecastPoints(enabledDevices, targetCity);
+      }, 1500);
     });
-  }, [devices, city]);
+  }, []);
+
+  useEffect(() => {
+    return subscribeFreePlanStore((event) => {
+      if (event === "selection_changed") {
+        return;
+      }
+      const tickResult = tickPlanOrchestrator();
+      setFreePlanUiRevision((v) => v + 1);
+      setDayPlanUiRevision((v) => v + 1);
+      setNightPlanUiRevision((v) => v + 1);
+      setRunningPlanSelection(getRunningPlanSelection());
+      if (tickResult.type === "free_plan_ended") {
+        setAlerts((prev) => [
+          ...prev,
+          "Free plan finished — devices turned off. Previous plan resumed when applicable.",
+        ]);
+      }
+    });
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (orBestDebounceRef.current) {
+        clearTimeout(orBestDebounceRef.current);
+      }
+      if (forecastDebounceRef.current) {
+        clearTimeout(forecastDebounceRef.current);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     void fetchDashboardData();
-    const id = setInterval(() => {
+    const pollId = setInterval(() => {
       void fetchDashboardData();
-    }, POLL_INTERVAL_MS);
-    return () => clearInterval(id);
+    }, DASHBOARD_POLL_INTERVAL_MS);
+    return () => {
+      clearInterval(pollId);
+    };
   }, []);
 
   useEffect(() => {
@@ -667,13 +900,16 @@ export function useDashboardState() {
     inverterMaxPowerWValue,
     availableEnergyWh,
     soc,
+    socFromController,
     voltage,
     current,
+    batteryTemperature,
     optimization,
     runnableCombinationCatalog,
     allRunnableCombinations,
     selectedRunningPlan,
     selectedPlanSustainability,
+    twelveHourOutlook,
     twelveHourRunForecast,
     forecastPoints,
     runningPlanSelection,
@@ -684,9 +920,12 @@ export function useDashboardState() {
     isOrPlanSelected,
     displayCity,
     nightPlanCardHint,
+    dayPlanCardHint,
     fetchDashboardData,
     runOptimization,
     onSelectOrBestPlan,
     selectFeasiblePlan,
+    isFreePlanActive,
+    freePlanRemainingMs,
   };
 }

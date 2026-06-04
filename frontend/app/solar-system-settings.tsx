@@ -164,7 +164,7 @@ export default function SolarSystemSettingsScreen() {
 
   return (
     <>
-      <OnBgScreen keyboardShouldPersistTaps="always">
+      <OnBgScreen variant="solar" keyboardShouldPersistTaps="always">
         <View style={onBgStyles.onBgPanel}>
           <ThemedText type="title" lightColor="#fff" style={onBgStyles.onBgTitle}>
             Solar System Settings

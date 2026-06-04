@@ -9,7 +9,7 @@ from urllib.request import urlopen
 logger = logging.getLogger(__name__)
 
 from ..models.optimization import ForecastPoint, WeatherInfo
-from ..models.weather import CitySuggestion, NightWindowResponse
+from ..models.weather import CitySuggestion, DayWindowResponse, NightWindowResponse
 
 PLANNING_HORIZON_HOURS = 12
 
@@ -69,6 +69,30 @@ def _parse_weather_datetime(value: str) -> datetime:
 
 def _format_hhmm(dt: datetime) -> str:
     return dt.strftime("%H:%M")
+
+
+def _daylight_window_from_daily(
+    *,
+    sunsets: List[str],
+    sunrises: List[str],
+    now: datetime,
+) -> Tuple[datetime, datetime, bool]:
+    """Return (sunrise, sunset, is_currently_daylight) for today or the next daylight period."""
+    for index in range(min(len(sunrises), len(sunsets))):
+        sunrise_dt = _parse_weather_datetime(sunrises[index])
+        sunset_dt = _parse_weather_datetime(sunsets[index])
+        if sunrise_dt <= now < sunset_dt:
+            return sunrise_dt, sunset_dt, True
+
+    for index in range(min(len(sunrises), len(sunsets))):
+        sunrise_dt = _parse_weather_datetime(sunrises[index])
+        if now < sunrise_dt:
+            sunset_dt = _parse_weather_datetime(sunsets[index])
+            return sunrise_dt, sunset_dt, False
+
+    sunrise_dt = _parse_weather_datetime(sunrises[-1])
+    sunset_dt = _parse_weather_datetime(sunsets[-1])
+    return sunrise_dt, sunset_dt, now >= sunrise_dt and now < sunset_dt
 
 
 def _night_window_from_daily(
@@ -178,6 +202,102 @@ def _fetch_night_window_open_meteo(city: str) -> NightWindowResponse:
         discharge_only=True,
         guidance=guidance,
     )
+
+
+def _day_window_fallback(city: str) -> DayWindowResponse:
+    return DayWindowResponse(
+        city=city,
+        sunrise="06:00",
+        sunset="18:00",
+        daylight_minutes=12 * 60,
+        planning_horizon_minutes=12 * 60,
+        is_currently_daylight=True,
+        solar_charging_expected=True,
+        guidance=(
+            "Weather sun times are temporarily unavailable; using a 12-hour daylight estimate. "
+            "Battery can recharge from solar during this window."
+        ),
+    )
+
+
+def _fetch_day_window_open_meteo(city: str) -> DayWindowResponse:
+    geocode_url = (
+        "https://geocoding-api.open-meteo.com/v1/search"
+        f"?name={quote(city)}&count=1&language=en&format=json"
+    )
+    with urlopen(geocode_url, timeout=10) as response:
+        geo_payload = json.loads(response.read().decode("utf-8"))
+    results = geo_payload.get("results") or []
+    if not results:
+        raise ValueError(f"City not found: {city}")
+
+    first = results[0]
+    latitude = first["latitude"]
+    longitude = first["longitude"]
+    resolved_city = first.get("name", city)
+
+    forecast_url = (
+        "https://api.open-meteo.com/v1/forecast"
+        f"?latitude={latitude}&longitude={longitude}"
+        "&current=is_day"
+        "&daily=sunrise,sunset"
+        "&forecast_days=3"
+        "&timezone=auto"
+    )
+    with urlopen(forecast_url, timeout=10) as response:
+        weather_payload = json.loads(response.read().decode("utf-8"))
+
+    current = weather_payload.get("current", {})
+    current_time_iso = current.get("time")
+    now = _parse_weather_datetime(current_time_iso) if current_time_iso else datetime.now()
+
+    daily = weather_payload.get("daily", {})
+    sunsets = daily.get("sunset") or []
+    sunrises = daily.get("sunrise") or []
+    if not sunsets or not sunrises:
+        raise ValueError("Weather API returned no sunrise/sunset data.")
+
+    sunrise_dt, sunset_dt, is_currently_daylight = _daylight_window_from_daily(
+        sunsets=sunsets,
+        sunrises=sunrises,
+        now=now,
+    )
+    daylight_minutes = max(0, int(round((sunset_dt - sunrise_dt).total_seconds() / 60)))
+    planning_horizon_minutes = min(PLANNING_HORIZON_HOURS * 60, daylight_minutes or 12 * 60)
+
+    if is_currently_daylight:
+        guidance = (
+            "Day plan: solar charging is expected until sunset. Add devices that stay within inverter "
+            "power and can run through the 12-hour outlook with battery + solar."
+        )
+    else:
+        guidance = (
+            "Upcoming daylight: plan always-on loads (fridge, freezer) plus daytime appliances. "
+            "Energy is not fixed — the battery recharges from solar during the day."
+        )
+
+    return DayWindowResponse(
+        city=resolved_city,
+        sunrise=_format_hhmm(sunrise_dt),
+        sunset=_format_hhmm(sunset_dt),
+        daylight_minutes=daylight_minutes,
+        planning_horizon_minutes=planning_horizon_minutes,
+        is_currently_daylight=is_currently_daylight,
+        solar_charging_expected=True,
+        guidance=guidance,
+    )
+
+
+def fetch_day_window(city: str) -> DayWindowResponse:
+    """Resolve sunrise→sunset daylight for day planning (solar charging)."""
+    try:
+        return _fetch_day_window_open_meteo(city)
+    except (ValueError, URLError, OSError, json.JSONDecodeError) as exc:
+        logger.warning("Day window fetch failed for %s: %s", city, exc)
+        return _day_window_fallback(city)
+    except Exception as exc:
+        logger.exception("Unexpected day window error for %s", city)
+        return _day_window_fallback(city)
 
 
 def fetch_night_window(city: str) -> NightWindowResponse:

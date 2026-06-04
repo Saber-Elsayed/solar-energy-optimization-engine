@@ -1,4 +1,5 @@
 import { useRouter } from 'expo-router';
+import { useEffect, useState } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 
@@ -8,15 +9,13 @@ import { MobileScreen, ScreenHeader } from '@/components/mobile/screen';
 import { BodyText, CaptionText, HeadingText, TitleText } from '@/components/mobile/typography';
 import { useAppData } from '@/contexts/AppDataContext';
 import { colors, radius, spacing } from '@/constants/theme';
-
-const PREVIEW_COUNT = 5;
+import { getFreePlanRemainingMs } from '@/lib/free-plan-store';
 
 export default function OptimizeScreen() {
   const router = useRouter();
   const {
-    allRunnableCombinations,
-    feasibleSelectionId,
     isOrPlanSelected,
+    isFreePlanActive,
     orBestPlan,
     orBestLoading,
     orBestError,
@@ -24,18 +23,28 @@ export default function OptimizeScreen() {
     selectedRunningPlan,
     runOptimization,
     onSelectOrBestPlan,
-    selectFeasiblePlan,
     fetchDashboardData,
     loading,
   } = useAppData();
 
-  const previewCombinations = allRunnableCombinations.slice(0, PREVIEW_COUNT);
+  const [freePlanMinuteTick, setFreePlanMinuteTick] = useState(0);
+  useEffect(() => {
+    if (!isFreePlanActive) {
+      return undefined;
+    }
+    const id = setInterval(() => setFreePlanMinuteTick((v) => v + 1), 30_000);
+    return () => clearInterval(id);
+  }, [isFreePlanActive]);
+  void freePlanMinuteTick;
+  const freePlanMinutesLeft = isFreePlanActive
+    ? Math.max(1, Math.ceil(getFreePlanRemainingMs() / 60_000))
+    : 0;
 
   return (
     <MobileScreen refreshing={loading} onRefresh={() => void fetchDashboardData()}>
       <ScreenHeader>
         <TitleText>Optimize</TitleText>
-        <CaptionText>OR-Tools plans and feasible device combinations</CaptionText>
+        <CaptionText>OR-Tools, free plan, and automatic day/night schedules</CaptionText>
       </ScreenHeader>
 
       <AppButton label="Run Optimization" onPress={runOptimization} loading={orBestLoading} />
@@ -84,52 +93,26 @@ export default function OptimizeScreen() {
         </Card>
       ) : null}
 
-      <View style={styles.sectionHeader}>
-        <HeadingText>Feasible Combinations</HeadingText>
-        <View style={styles.countBadge}>
-          <CaptionText style={styles.countText}>{allRunnableCombinations.length} options</CaptionText>
+      <Card highlighted={isFreePlanActive}>
+        <View style={styles.cardHeader}>
+          <HeadingText>Free plan</HeadingText>
+          {isFreePlanActive ? (
+            <View style={styles.activeBadge}>
+              <CaptionText style={styles.activeBadgeText}>Running</CaptionText>
+            </View>
+          ) : null}
         </View>
-      </View>
-
-      {previewCombinations.length === 0 ? (
-        <Card>
-          <CaptionText>No feasible combinations under current inverter and energy limits.</CaptionText>
-        </Card>
-      ) : (
-        previewCombinations.map((combo) => {
-          const selected = feasibleSelectionId === combo.id;
-          return (
-            <Pressable key={combo.id} onPress={() => selectFeasiblePlan(combo.id)}>
-              <Card highlighted={selected} style={styles.comboCard}>
-                <View style={styles.comboTop}>
-                  <Ionicons
-                    name={selected ? 'radio-button-on' : 'radio-button-off'}
-                    size={20}
-                    color={selected ? colors.primary : colors.textMuted}
-                  />
-                  <View style={styles.comboInfo}>
-                    <BodyText style={styles.comboTitle}>{combo.summary}</BodyText>
-                    <CaptionText>
-                      {combo.totalPowerW.toFixed(0)} W load · {combo.totalEnergyWh.toFixed(0)} Wh total
-                    </CaptionText>
-                  </View>
-                  {selected ? (
-                    <View style={styles.activeBadge}>
-                      <CaptionText style={styles.activeBadgeText}>Active</CaptionText>
-                    </View>
-                  ) : null}
-                </View>
-              </Card>
-            </Pressable>
-          );
-        })
-      )}
-
-      <AppButton
-        label="Browse all combinations"
-        onPress={() => router.push('/feasible-combinations')}
-        variant="outline"
-      />
+        <CaptionText>
+          All products with switches · inverter limit only · set run hours (energy may end sooner). Pauses day/night
+          plan while active.
+        </CaptionText>
+        {isFreePlanActive ? (
+          <CaptionText>
+            Time left: ~{freePlanMinutesLeft} min
+          </CaptionText>
+        ) : null}
+        <AppButton label="Open free plan" onPress={() => router.push('/free-plan')} variant="outline" />
+      </Card>
 
       <Card>
         <HeadingText>Automatic Schedule</HeadingText>

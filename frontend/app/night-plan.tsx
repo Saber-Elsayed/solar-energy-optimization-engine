@@ -11,6 +11,7 @@ import {
   TextInput,
   View,
 } from 'react-native';
+import { HomeSqmEditor } from '@/components/home-sqm-editor';
 import { OnBgScreen } from '@/components/on-bg-screen';
 import { comboStyles } from '@/components/combination-catalog-ui';
 import { onBgStyles } from '@/styles/on-bg';
@@ -44,7 +45,6 @@ import {
   isNightPlanModeActive,
   isNightSetupComplete,
   pruneNightPlanDeviceIds,
-  resetNightPlanHomeProfile,
   setHomeSqm,
   setNightPlanDeviceEnabled,
   setNightPlanMember,
@@ -53,6 +53,11 @@ import {
   setLastNightDarknessMinutes,
   subscribeNightPlanStore,
 } from '@/lib/night-plan-store';
+import {
+  availableEnergyFromSoc,
+  parseControllerSocPercent,
+  resolveSocPercent,
+} from '@/lib/battery-soc';
 import {
   buildNightPlanToggleBlock,
   formatNightRuntimeLabel,
@@ -136,12 +141,11 @@ export default function NightPlanScreen() {
   const setupComplete = useMemo(() => isNightSetupComplete(), [nightPlanRevision]);
   const nightPlanModeActive = useMemo(() => isNightPlanModeActive(), [nightPlanRevision]);
 
-  const availableEnergyWh = useMemo(() => {
-    if (soc !== null) {
-      return batteryCapacityWhValue * (soc / 100);
-    }
-    return batteryCapacityWhValue;
-  }, [batteryCapacityWhValue, soc]);
+  const socPercent = resolveSocPercent(soc);
+  const availableEnergyWh = useMemo(
+    () => availableEnergyFromSoc(soc, batteryCapacityWhValue),
+    [soc, batteryCapacityWhValue, nightPlanRevision],
+  );
 
   const darknessMinutes = nightWindow?.darkness_minutes ?? (nightWindowError ? NIGHT_FALLBACK_MINUTES : 0);
   const darknessHoursLabel = darknessMinutes > 0 ? (darknessMinutes / 60).toFixed(1) : '—';
@@ -281,9 +285,7 @@ export default function NightPlanScreen() {
         const energyRes = await fetch(`${ENERGY_LATEST_URL}?t=${Date.now()}`);
         if (energyRes.ok) {
           const energy = (await energyRes.json()) as EnergyDataItem;
-          if (typeof energy.soc === 'number') {
-            setSoc(energy.soc);
-          }
+          setSoc(parseControllerSocPercent(energy.soc));
         }
 
         await reloadDevices();
@@ -514,7 +516,7 @@ export default function NightPlanScreen() {
   const showSuggestionsStep = showWizard && homeSqm && suggestionBundle;
 
   return (
-    <OnBgScreen>
+    <OnBgScreen variant="solar">
       {loading ? (
         <ActivityIndicator size="large" color="#ffffff" />
       ) : loadError ? (
@@ -649,14 +651,12 @@ export default function NightPlanScreen() {
                   )}
                 </Pressable>
 
-                <Pressable onPress={() => resetNightPlanHomeProfile()}>
-                  <ThemedText lightColor="#fff" style={comboStyles.muted}>Change home size (m²)</ThemedText>
-                </Pressable>
               </View>
             ) : null}
 
             {setupComplete ? (
               <>
+                <HomeSqmEditor onUpdated={() => setNightPlanRevision((v) => v + 1)} resetDaySetup />
                 <View style={onBgStyles.onBgPanel}>
                   <ThemedText type="subtitle" lightColor="#fff" style={onBgStyles.onBgTitle}>
                     {nightPlanModeActive ? 'Night plan is active' : 'Normal mode (night plan paused)'}

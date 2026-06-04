@@ -19,3 +19,16 @@ class NightWindowResponse(BaseModel):
     discharge_only: bool = True
     guidance: str
 
+
+class DayWindowResponse(BaseModel):
+    """Daylight window from sunrise until sunset (solar charging + 12h planning)."""
+
+    city: str
+    sunrise: str
+    sunset: str
+    daylight_minutes: int
+    planning_horizon_minutes: int = 12 * 60
+    is_currently_daylight: bool
+    solar_charging_expected: bool = True
+    guidance: str
+

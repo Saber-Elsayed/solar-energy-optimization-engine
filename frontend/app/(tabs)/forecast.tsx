@@ -9,7 +9,7 @@ import { Card } from '@/components/mobile/card';
 import { MobileScreen, ScreenHeader } from '@/components/mobile/screen';
 import { BodyText, CaptionText, HeadingText, TitleText } from '@/components/mobile/typography';
 import { useAppData } from '@/contexts/AppDataContext';
-import { NIGHT_WINDOW_URL } from '@/lib/api-config';
+import { DAY_WINDOW_URL, NIGHT_WINDOW_URL } from '@/lib/api-config';
 import { colors, spacing } from '@/constants/theme';
 
 type NightWindow = {
@@ -31,6 +31,7 @@ export default function ForecastScreen() {
     selectedRunningPlan,
     selectedPlanSustainability,
     nightPlanCardHint,
+    dayPlanCardHint,
     fetchDashboardData,
     loading,
   } = useAppData();
@@ -38,6 +39,12 @@ export default function ForecastScreen() {
   const [nightWindow, setNightWindow] = useState<NightWindow | null>(null);
   const [nightLoading, setNightLoading] = useState(false);
   const [nightError, setNightError] = useState<string | null>(null);
+  const [dayWindow, setDayWindow] = useState<{
+    sunrise?: string;
+    sunset?: string;
+    daylight_minutes?: number;
+  } | null>(null);
+  const [dayLoading, setDayLoading] = useState(false);
 
   const loadWhPerHour = selectedRunningPlan?.totalPowerW ?? 0;
   const targetSoc = 25;
@@ -49,21 +56,32 @@ export default function ForecastScreen() {
   useEffect(() => {
     const targetCity = city.trim() || 'Tel Aviv';
     setNightLoading(true);
+    setDayLoading(true);
     setNightError(null);
     void (async () => {
       try {
-        const res = await fetch(`${NIGHT_WINDOW_URL}?city=${encodeURIComponent(targetCity)}&t=${Date.now()}`);
-        if (!res.ok) {
+        const [nightRes, dayRes] = await Promise.all([
+          fetch(`${NIGHT_WINDOW_URL}?city=${encodeURIComponent(targetCity)}&t=${Date.now()}`),
+          fetch(`${DAY_WINDOW_URL}?city=${encodeURIComponent(targetCity)}&t=${Date.now()}`),
+        ]);
+        if (!nightRes.ok) {
           setNightWindow(null);
-          setNightError(`Could not load night window (${res.status})`);
-          return;
+          setNightError(`Could not load night window (${nightRes.status})`);
+        } else {
+          setNightWindow((await nightRes.json()) as NightWindow);
         }
-        setNightWindow((await res.json()) as NightWindow);
+        if (dayRes.ok) {
+          setDayWindow(await dayRes.json());
+        } else {
+          setDayWindow(null);
+        }
       } catch {
         setNightWindow(null);
+        setDayWindow(null);
         setNightError('Could not reach weather service.');
       } finally {
         setNightLoading(false);
+        setDayLoading(false);
       }
     })();
   }, [city]);
@@ -112,6 +130,45 @@ export default function ForecastScreen() {
           </CaptionText>
         </Card>
       ) : null}
+
+      <Card>
+        <View style={styles.cardHeader}>
+          <HeadingText>Day Plan (12h)</HeadingText>
+          <Ionicons name="sunny" size={20} color={colors.primary} />
+        </View>
+        {dayLoading ? (
+          <ActivityIndicator color={colors.primary} />
+        ) : (
+          <View style={styles.nightGrid}>
+            <View style={styles.nightItem}>
+              <CaptionText>Sunrise</CaptionText>
+              <BodyText>{dayWindow?.sunrise ?? '—'}</BodyText>
+            </View>
+            <View style={styles.nightItem}>
+              <CaptionText>Sunset</CaptionText>
+              <BodyText>{dayWindow?.sunset ?? '—'}</BodyText>
+            </View>
+            <View style={styles.nightItem}>
+              <CaptionText>Daylight</CaptionText>
+              <BodyText>
+                {dayWindow?.daylight_minutes !== undefined
+                  ? `${(dayWindow.daylight_minutes / 60).toFixed(1)}h`
+                  : '—'}
+              </BodyText>
+            </View>
+          </View>
+        )}
+        <CaptionText>{dayPlanCardHint}</CaptionText>
+        <AppButton
+          label="Day Plan (solar charging)"
+          onPress={() =>
+            router.push({
+              pathname: '/day-plan',
+              params: { city: city.trim() || 'Tel Aviv' },
+            })
+          }
+        />
+      </Card>
 
       <Card>
         <View style={styles.cardHeader}>

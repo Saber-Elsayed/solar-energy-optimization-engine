@@ -7,9 +7,15 @@ type BatteryGaugeProps = {
   soc: number | null;
   voltage: number;
   current: number;
+  batteryTemperature?: number;
 };
 
-export function BatteryGauge({ soc, voltage, current }: BatteryGaugeProps) {
+export function BatteryGauge({
+  soc,
+  voltage,
+  current,
+  batteryTemperature = 0,
+}: BatteryGaugeProps) {
   const pct = soc !== null ? Math.max(0, Math.min(100, soc)) : 0;
   return (
     <View style={styles.row}>
@@ -28,6 +34,10 @@ export function BatteryGauge({ soc, voltage, current }: BatteryGaugeProps) {
         <View>
           <CaptionText>Current</CaptionText>
           <BodyText>{current > 0 ? `${current.toFixed(2)} A` : 'N/A'}</BodyText>
+        </View>
+        <View>
+          <CaptionText>Temperature</CaptionText>
+          <BodyText>{batteryTemperature.toFixed(1)} °C</BodyText>
         </View>
       </View>
     </View>

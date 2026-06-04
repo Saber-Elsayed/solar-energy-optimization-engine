@@ -300,7 +300,7 @@ export default function ManageDevicesScreen() {
 
   return (
     <>
-      <OnBgScreen keyboardShouldPersistTaps="always">
+      <OnBgScreen variant="solar" keyboardShouldPersistTaps="always">
         <View style={onBgStyles.onBgPanel}>
           <ThemedText type="subtitle" lightColor="#fff" style={onBgStyles.onBgTitle}>
             Add / Edit Product

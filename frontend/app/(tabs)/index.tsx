@@ -11,6 +11,7 @@ import { BodyText, CaptionText, HeadingText, TitleText } from '@/components/mobi
 import { useAppData } from '@/contexts/AppDataContext';
 import { useAuth } from '@/contexts/AuthContext';
 import { colors, radius, spacing } from '@/constants/theme';
+import { getTimeOfDayGreeting } from '@/lib/time-greeting';
 export default function HomeScreen() {
   const router = useRouter();
   const { user } = useAuth();
@@ -18,8 +19,10 @@ export default function HomeScreen() {
     loading,
     alerts,
     soc,
+    socFromController,
     voltage,
     current,
+    batteryTemperature,
     availableEnergyWh,
     batteryCapacityWhValue,
     displayCity,
@@ -30,6 +33,7 @@ export default function HomeScreen() {
     orBestError,
     selectedRunningPlan,
     selectedPlanSustainability,
+    twelveHourOutlook,
     isOrPlanSelected,
     fetchDashboardData,
     runOptimization,
@@ -37,11 +41,14 @@ export default function HomeScreen() {
   } = useAppData();
 
   const storedKwh = (availableEnergyWh / 1000).toFixed(1);
-  const hoursToEmpty =
-    selectedPlanSustainability && selectedPlanSustainability.sustainableHours > 0
-      ? `${selectedPlanSustainability.sustainableHours}h`
-      : '—';
+  const hoursToEmpty = twelveHourOutlook.label;
+  const toEmptySubtext = twelveHourOutlook.runsFullHorizon
+    ? 'OK for 12h'
+    : twelveHourOutlook.planningHorizonHours > 0
+      ? 'Short of 12h'
+      : '';
   const greetingName = user?.email?.split('@')[0] ?? 'User';
+  const timeGreeting = getTimeOfDayGreeting();
   const tempLabel =
     weather?.temperature !== undefined && weather?.temperature !== null
       ? `${weather.temperature}°`
@@ -50,7 +57,9 @@ export default function HomeScreen() {
   return (
     <MobileScreen refreshing={loading} onRefresh={() => void fetchDashboardData()}>
       <ScreenHeader>
-        <CaptionText>Good morning, {greetingName}</CaptionText>
+        <CaptionText>
+          {timeGreeting}, {greetingName}
+        </CaptionText>
         <View style={styles.titleRow}>
           <TitleText>Dashboard</TitleText>
           <View style={styles.weatherPill}>
@@ -73,9 +82,17 @@ export default function HomeScreen() {
       ) : null}
 
       <View style={styles.statRow}>
-        <StatPill icon="battery-charging" value={soc !== null ? `${soc.toFixed(0)}%` : '—'} label="Charge" />
+        <StatPill
+          icon="battery-charging"
+          value={socFromController ? `${soc.toFixed(0)}%` : `~${soc.toFixed(0)}%`}
+          label={socFromController ? 'Charge' : 'Full (no controller yet)'}
+        />
         <StatPill icon="flash" value={`${storedKwh} kWh`} label="Stored" />
-        <StatPill icon="time-outline" value={hoursToEmpty} label="To Empty" />
+        <StatPill
+          icon="time-outline"
+          value={hoursToEmpty}
+          label={toEmptySubtext ? `12h · ${toEmptySubtext}` : '12h outlook'}
+        />
       </View>
 
       <Card>
@@ -89,7 +106,12 @@ export default function HomeScreen() {
           <ActivityIndicator color={colors.primary} />
         ) : (
           <>
-            <BatteryGauge soc={soc} voltage={voltage} current={current} />
+            <BatteryGauge
+              soc={soc}
+              voltage={voltage}
+              current={current}
+              batteryTemperature={batteryTemperature}
+            />
             <View style={styles.energyRow}>
               <CaptionText>Available Energy</CaptionText>
               <HeadingText>{availableEnergyWh.toFixed(0)} Wh</HeadingText>
