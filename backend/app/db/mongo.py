@@ -44,3 +44,7 @@ def get_solar_systems_collection() -> Collection:
 def get_app_users_collection() -> Collection:
     return get_db()["app_users"]
 
+
+def get_user_logs_collection() -> Collection:
+    return get_db()["user_logs"]
+

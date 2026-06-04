@@ -1,9 +1,12 @@
+import logging
 from typing import Any
 
 from fastapi import Depends, Header, HTTPException
 
 from ..config import get_admin_emails
 from ..services.firebase_admin_service import verify_firebase_id_token
+
+logger = logging.getLogger(__name__)
 
 
 def _extract_bearer_token(authorization: str | None) -> str:
@@ -15,6 +18,25 @@ def _extract_bearer_token(authorization: str | None) -> str:
     if not token:
         raise HTTPException(status_code=401, detail="Missing bearer token")
     return token
+
+
+def get_optional_firebase_user(authorization: str | None = Header(default=None)) -> dict[str, Any] | None:
+    """Decode Bearer token when present; never fail the request if auth is missing or invalid."""
+    if not authorization or not authorization.lower().startswith("bearer "):
+        return None
+    token = authorization.split(" ", 1)[1].strip()
+    if not token:
+        return None
+    try:
+        return verify_firebase_id_token(token)
+    except HTTPException:
+        return None
+    except RuntimeError as exc:
+        logger.warning("Firebase Admin unavailable for optional auth: %s", exc)
+        return None
+    except Exception as exc:
+        logger.warning("Optional Firebase token verification failed: %s", exc)
+        return None
 
 
 def get_firebase_user(authorization: str | None = Header(default=None)) -> dict[str, Any]:

@@ -62,7 +62,9 @@ function RootNavigator() {
     const inVerifyEmail = authRoute === 'verify-email';
     const inPendingApproval = authRoute === 'pending-approval';
     const inAdminApprovals = authRoute === 'admin-approvals';
-    const inAuthScreen = inLogin || inRegister || inVerifyEmail || inPendingApproval || inAdminApprovals;
+    const inAdminLogs = authRoute === 'admin-logs';
+    const inAdminScreen = inAdminApprovals || inAdminLogs;
+    const inAuthScreen = inLogin || inRegister || inVerifyEmail || inPendingApproval || inAdminScreen;
 
     if (!user && !inAuthScreen) {
       router.replace('/login');
@@ -75,7 +77,7 @@ function RootNavigator() {
     }
 
     // Admins skip user approval flow and go straight to approvals screen.
-    if (user && isEmailVerified && isAdmin && !inAdminApprovals) {
+    if (user && isEmailVerified && isAdmin && !inAdminScreen) {
       router.replace('/admin-approvals');
       return;
     }
@@ -101,7 +103,7 @@ function RootNavigator() {
       return;
     }
 
-    if (user && isEmailVerified && inAdminApprovals && !isAdmin) {
+    if (user && isEmailVerified && inAdminScreen && !isAdmin) {
       router.replace(isApproved ? '/(tabs)' : '/pending-approval');
     }
   }, [user, loading, isEmailVerified, isApproved, isAdmin, segments, router]);
@@ -126,6 +128,7 @@ function RootNavigator() {
           <Stack.Screen name="verify-email" options={{ headerShown: false, contentStyle: { flex: 1 } }} />
           <Stack.Screen name="pending-approval" options={{ headerShown: false, contentStyle: { flex: 1 } }} />
           <Stack.Screen name="admin-approvals" options={{ headerShown: false, contentStyle: { flex: 1 } }} />
+          <Stack.Screen name="admin-logs" options={{ headerShown: false, contentStyle: { flex: 1 } }} />
           <Stack.Screen name="manage-devices" options={{ title: 'Manage Electrical Devices' }} />
           <Stack.Screen name="solar-system-settings" options={{ title: 'Solar System Settings' }} />
           <Stack.Screen

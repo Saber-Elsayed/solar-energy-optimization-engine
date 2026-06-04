@@ -12,6 +12,7 @@ import {
   rejectRegistration,
   type AdminRegistration,
 } from '@/lib/firebase-admin-api';
+import { formatLogTimestamp } from '@/lib/format-log-timestamp';
 
 export default function AdminApprovalsScreen() {
   const router = useRouter();
@@ -87,8 +88,8 @@ export default function AdminApprovalsScreen() {
     <AuthScreenBackground variant="page">
       <ScrollView contentContainerStyle={styles.container} showsVerticalScrollIndicator={false}>
         <View style={styles.header}>
-          <Text style={authScreenStyles.title}>Pending approvals</Text>
-          <Text style={styles.mutedOnDark}>{pendingCount} pending</Text>
+          <Text style={authScreenStyles.title}>Admin Dashboard</Text>
+          <Text style={styles.mutedOnDark}>{pendingCount} pending registration(s)</Text>
           <View style={styles.headerRow}>
             <Pressable style={authScreenStyles.secondaryButton} onPress={() => void load()} disabled={loading}>
               <Text style={authScreenStyles.secondaryButtonText}>Refresh</Text>
@@ -98,6 +99,18 @@ export default function AdminApprovalsScreen() {
             </Pressable>
           </View>
         </View>
+
+        <View style={onBgStyles.onBgPanel}>
+          <Text style={authScreenStyles.title}>User Activity Logs</Text>
+          <Text style={authScreenStyles.muted}>
+            Review authentication, device, solar, and optimization events stored in MongoDB.
+          </Text>
+          <Pressable style={styles.viewLogsButton} onPress={() => router.push('/admin-logs')}>
+            <Text style={styles.viewLogsButtonText}>View Logs</Text>
+          </Pressable>
+        </View>
+
+        <Text style={styles.sectionTitle}>Pending approvals</Text>
 
         {loading ? (
           <View style={styles.loadingBox}>
@@ -113,7 +126,7 @@ export default function AdminApprovalsScreen() {
             <View key={row.firebase_uid} style={onBgStyles.onBgPanel}>
               <Text style={authScreenStyles.email}>{row.email}</Text>
               <Text style={authScreenStyles.muted}>
-                Requested: {new Date(row.created_at).toLocaleString()}
+                Requested: {formatLogTimestamp(row.created_at)}
               </Text>
               <View style={styles.row}>
                 <Pressable style={styles.approve} onPress={() => void handleApprove(row.firebase_uid, row.email)}>
@@ -166,4 +179,13 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(185, 28, 28, 0.35)',
   },
   secondaryButtonDangerText: { color: '#fff', fontWeight: '700' },
+  sectionTitle: { color: '#fff', fontWeight: '800', fontSize: 17, marginTop: 4 },
+  viewLogsButton: {
+    marginTop: 10,
+    backgroundColor: '#0a7ea4',
+    borderRadius: 8,
+    alignItems: 'center',
+    paddingVertical: 12,
+  },
+  viewLogsButtonText: { color: '#fff', fontWeight: '700', fontSize: 16 },
 });

@@ -12,10 +12,11 @@ import {
 
 } from 'firebase/auth';
 
-import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 
 
 
+import { logAuthActivity, logUserActivity, logUserActivityAwait } from '@/lib/activity-log';
 import { isAllowlistedAdminEmail } from '@/lib/admin-email-allowlist';
 import { auth } from '@/lib/firebase';
 import { sendUserVerificationEmail } from '@/lib/firebase-email-verification';
@@ -84,7 +85,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const [registrationStatus, setRegistrationStatus] = useState<RegistrationStatus | null>(null);
 
-
+  const sessionLoggedUidRef = useRef<string | null>(null);
 
   const loadApprovalState = useCallback(async (firebaseUser: User) => {
 
@@ -160,7 +161,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setUser(firebaseUser);
 
       if (!firebaseUser) {
-
+        sessionLoggedUidRef.current = null;
         setIsAdmin(false);
 
         setIsApproved(null);
@@ -171,6 +172,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
         return;
 
+      }
+
+      if (sessionLoggedUidRef.current !== firebaseUser.uid) {
+        sessionLoggedUidRef.current = firebaseUser.uid;
+        logAuthActivity('LOGIN', firebaseUser, { source: 'auth_state' });
       }
 
       await loadApprovalState(firebaseUser);
@@ -215,6 +221,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // Registration record can be created later; verification email is the priority.
     }
 
+    await logUserActivityAwait({
+      action: 'REGISTER',
+      entity_type: 'user',
+      entity_id: credential.user.uid,
+      metadata: { email: credential.user.email ?? '' },
+    });
+
     setUser(credential.user);
 
     setIsAdmin(false);
@@ -228,6 +241,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
 
   const logout = async () => {
+
+    const currentUser = auth.currentUser;
+    if (currentUser) {
+      sessionLoggedUidRef.current = null;
+      await logUserActivityAwait({
+        action: 'LOGOUT',
+        entity_type: 'user',
+        entity_id: currentUser.uid,
+        metadata: { email: currentUser.email ?? '' },
+      });
+    }
 
     await signOut(auth);
 

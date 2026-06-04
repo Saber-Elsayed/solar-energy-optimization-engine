@@ -7,6 +7,7 @@ from ...models.registration import RegistrationStatusResponse
 from ...services.registration_service import get_registration_status, submit_registration
 from ...config import get_admin_emails
 from ...utils.firebase_deps import get_firebase_user
+from ...utils.log_helpers import record_from_firebase_user
 
 router = APIRouter(prefix="/firebase/registration", tags=["firebase-registration"])
 
@@ -17,7 +18,15 @@ def register_pending_user(firebase_user: dict[str, Any] = Depends(get_firebase_u
     if not email:
         raise HTTPException(status_code=400, detail="Firebase token is missing email")
     try:
-        return submit_registration(firebase_user["uid"], email)
+        result = submit_registration(firebase_user["uid"], email)
+        record_from_firebase_user(
+            firebase_user,
+            "REGISTER",
+            entity_type="user",
+            entity_id=firebase_user["uid"],
+            metadata={"status": result.status},
+        )
+        return result
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except PyMongoError as exc:

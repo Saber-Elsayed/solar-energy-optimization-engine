@@ -4,6 +4,8 @@ import { ActivityIndicator, Alert, Pressable, StyleSheet, Switch, Text, TextInpu
 import { CenterAutoToast } from '@/components/center-auto-toast';
 import { OnBgScreen } from '@/components/on-bg-screen';
 import { ThemedText } from '@/components/themed-text';
+import { logUserActivity } from '@/lib/activity-log';
+import { optionalAuthFetch } from '@/lib/authenticated-fetch';
 import { DEVICES_URL } from '@/lib/api-config';
 import { onBgStyles } from '@/styles/on-bg';
 
@@ -202,7 +204,7 @@ export default function ManageDevicesScreen() {
     setToast(null);
     try {
       console.log('[ManageDevices] sending request', { method, url, payload });
-      const res = await fetch(url, {
+      const res = await optionalAuthFetch(url, {
         method,
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
@@ -226,6 +228,16 @@ export default function ManageDevicesScreen() {
 
       const successMessage =
         saveResult.operation === 'created' ? 'Product added successfully' : 'Product updated successfully';
+      logUserActivity({
+        action: saveResult.operation === 'created' ? 'CREATE_DEVICE' : 'UPDATE_DEVICE',
+        entity_type: 'device',
+        entity_id: saveResult.id,
+        metadata: {
+          device_name: payload.name,
+          power_w: payload.power,
+          duration_hours: Math.round((payload.duration / 60) * 10000) / 10000,
+        },
+      });
       setToast({ kind: 'success', message: successMessage });
     } catch (err) {
       console.error('[ManageDevices] save error', err);
@@ -253,8 +265,9 @@ export default function ManageDevicesScreen() {
   const deleteDevice = async (deviceId: string) => {
     setToast(null);
     setDeletingId(deviceId);
+    const existing = devices.find((row) => row.id === deviceId);
     try {
-      const res = await fetch(`${DEVICES_URL}/${deviceId}`, { method: 'DELETE' });
+      const res = await optionalAuthFetch(`${DEVICES_URL}/${deviceId}`, { method: 'DELETE' });
       if (!res.ok) {
         console.error('[ManageDevices] DELETE failed', { status: res.status });
         setToast({ kind: 'error', message: PRODUCT_DELETE_FAILURE_MESSAGE });
@@ -263,6 +276,18 @@ export default function ManageDevicesScreen() {
       if (editingId === deviceId) {
         resetForm();
       }
+      logUserActivity({
+        action: 'DELETE_DEVICE',
+        entity_type: 'device',
+        entity_id: deviceId,
+        metadata: existing
+          ? {
+              device_name: existing.name,
+              power_w: existing.power,
+              duration_hours: Math.round((existing.duration / 60) * 10000) / 10000,
+            }
+          : undefined,
+      });
       setToast({ kind: 'success', message: PRODUCT_DELETED_MESSAGE });
       await loadDevices();
     } catch (err) {

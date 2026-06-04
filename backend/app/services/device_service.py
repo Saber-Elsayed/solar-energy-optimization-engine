@@ -43,6 +43,26 @@ def list_devices() -> List[dict]:
     ]
 
 
+def get_device_by_id(device_id: str) -> dict | None:
+    try:
+        obj_id = ObjectId(device_id)
+    except Exception:
+        return None
+    rec = get_devices_collection().find_one({"_id": obj_id})
+    if not rec:
+        return None
+    return {
+        "id": str(rec["_id"]),
+        "name": rec["name"],
+        "power": rec["power"],
+        "duration": rec["duration"],
+        "priority": rec["priority"],
+        "essential": rec["essential"],
+        "start_time": rec["start_time"],
+        "end_time": rec["end_time"],
+    }
+
+
 def update_device(device_id: str, device: DeviceItem) -> tuple[bool, str]:
     obj_id = ObjectId(device_id)
     result = get_devices_collection().update_one({"_id": obj_id}, {"$set": device.model_dump()})

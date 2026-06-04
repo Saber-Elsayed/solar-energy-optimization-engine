@@ -4,6 +4,8 @@ import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, TextInput, View 
 import { CenterAutoToast } from '@/components/center-auto-toast';
 import { OnBgScreen } from '@/components/on-bg-screen';
 import { ThemedText } from '@/components/themed-text';
+import { logUserActivity } from '@/lib/activity-log';
+import { optionalAuthFetch } from '@/lib/authenticated-fetch';
 import { SOLAR_SYSTEM_URL } from '@/lib/api-config';
 import { onBgStyles } from '@/styles/on-bg';
 
@@ -88,11 +90,14 @@ export default function SolarSystemSettingsScreen() {
       return;
     }
 
+    const oldBattery = hasProfile ? Number(batteryCapacityWh.replace(',', '.')) : null;
+    const oldInverter = hasProfile ? Number(inverterMaxPowerW.replace(',', '.')) : null;
+
     setSaving(true);
     setSaveFeedback(null);
     try {
       console.log('[SOLAR DEBUG] request payload:', payload);
-      const response = await fetch(SOLAR_SYSTEM_URL, {
+      const response = await optionalAuthFetch(SOLAR_SYSTEM_URL, {
         method: hasProfile ? 'PUT' : 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
@@ -130,6 +135,24 @@ export default function SolarSystemSettingsScreen() {
         saveResult.operation === 'created'
           ? 'Solar system settings created successfully'
           : 'Solar system settings updated successfully';
+      logUserActivity({
+        action: 'UPDATE_BATTERY_CAPACITY',
+        entity_type: 'solar_system',
+        metadata: {
+          field: 'battery_capacity_wh',
+          old_value: oldBattery,
+          new_value: savedProfile.battery_capacity_wh,
+        },
+      });
+      logUserActivity({
+        action: 'UPDATE_INVERTER_LIMIT',
+        entity_type: 'solar_system',
+        metadata: {
+          field: 'inverter_max_power_w',
+          old_value: oldInverter,
+          new_value: savedProfile.inverter_max_power_w,
+        },
+      });
       setSaveFeedback({ kind: 'success', message: successMessage });
     } catch (err) {
       console.log('[SOLAR DEBUG] save error:', err);

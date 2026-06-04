@@ -18,11 +18,13 @@ from .api.routes import (
     devices_router,
     energy_router,
     firebase_registration_router,
+    logs_router,
     optimization_router,
     solar_system_router,
     weather_router,
 )
 from .services.firebase_admin_service import init_firebase_admin
+from .services.log_service import log_service
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +41,10 @@ def create_app() -> FastAPI:
 
     app = FastAPI(title="Solar Energy Optimization Engine", version="0.1.0")
 
+    @app.on_event("startup")
+    def _ensure_log_indexes() -> None:
+        log_service.ensure_indexes()
+
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],
@@ -54,6 +60,7 @@ def create_app() -> FastAPI:
     app.include_router(auth_router)
     app.include_router(firebase_registration_router)
     app.include_router(admin_registrations_router)
+    app.include_router(logs_router)
     app.include_router(weather_router)
     app.include_router(energy_router)
     app.include_router(devices_router)
