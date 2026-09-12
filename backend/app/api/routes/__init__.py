@@ -1,3 +1,4 @@
+from .agent import router as agent_router
 from .devices import router as devices_router
 from .energy import router as energy_router
 from .optimization import router as optimization_router
@@ -9,6 +10,7 @@ from .registration import router as firebase_registration_router
 
 __all__ = [
     "admin_registrations_router",
+    "agent_router",
     "devices_router",
     "energy_router",
     "firebase_registration_router",

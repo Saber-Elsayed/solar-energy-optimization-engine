@@ -14,6 +14,7 @@ from fastapi.staticfiles import StaticFiles
 
 from .api.routes import (
     admin_registrations_router,
+    agent_router,
     auth_router,
     devices_router,
     energy_router,
@@ -58,6 +59,7 @@ def create_app() -> FastAPI:
     app.include_router(energy_router)
     app.include_router(devices_router)
     app.include_router(optimization_router)
+    app.include_router(agent_router)
     app.include_router(solar_system_router)
 
     admin_panel_dir = Path(__file__).resolve().parent.parent / "admin_panel"
