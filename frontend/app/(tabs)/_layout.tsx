@@ -51,6 +51,13 @@ export default function TabLayout() {
             }}
           />
           <Tabs.Screen
+            name="assistant"
+            options={{
+              title: 'Assistant',
+              tabBarIcon: ({ color, size }) => <Ionicons name="chatbubble-ellipses-outline" size={size} color={color} />,
+            }}
+          />
+          <Tabs.Screen
             name="settings"
             options={{
               title: 'Settings',
@@ -79,7 +86,7 @@ const styles = StyleSheet.create({
     paddingTop: 8,
   },
   tabLabel: {
-    fontSize: 11,
+    fontSize: 10,
     fontWeight: '600',
   },
 });

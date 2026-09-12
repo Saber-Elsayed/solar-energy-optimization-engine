@@ -116,6 +116,15 @@ export default function HomeScreen() {
         </Card>
       </View>
 
+      <Card onPress={() => router.push('/(tabs)/assistant')}>
+        <View style={styles.cardHeader}>
+          <HeadingText>Energy Assistant</HeadingText>
+          <Ionicons name="chatbubble-ellipses-outline" size={20} color={colors.primary} />
+        </View>
+        <BodyText>Ask what you can run, or how battery and solar energy work.</BodyText>
+        <CaptionText>Recommendations only — appliances are not switched automatically.</CaptionText>
+      </Card>
+
       <Card highlighted={isOrPlanSelected}>
         <View style={styles.cardHeader}>
           <HeadingText>Recommended Plan</HeadingText>

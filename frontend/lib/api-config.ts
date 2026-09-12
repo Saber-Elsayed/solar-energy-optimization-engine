@@ -29,6 +29,7 @@ export const CITIES_URL = `${API_BASE_URL}/cities`;
 export const NIGHT_WINDOW_URL = `${API_BASE_URL}/weather/night-window`;
 export const OPTIMIZE_URL = `${API_BASE_URL}/optimize`;
 export const OPTIMIZE_BEST_URL = `${API_BASE_URL}/optimize/best-combination`;
+export const AGENT_RECOMMEND_URL = `${API_BASE_URL}/agent/recommend`;
 export const ADMIN_REGISTRATIONS_URL = `${API_BASE_URL}/admin/registrations`;
 export const FIREBASE_REGISTRATION_SUBMIT_URL = `${API_BASE_URL}/firebase/registration/submit`;
 export const FIREBASE_REGISTRATION_STATUS_URL = `${API_BASE_URL}/firebase/registration/status`;
