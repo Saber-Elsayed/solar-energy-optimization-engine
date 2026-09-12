@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+from pathlib import Path
 from typing import Any
 
 import firebase_admin
@@ -18,9 +19,18 @@ def _load_service_account() -> dict[str, Any] | None:
         return json.loads(json_blob)
 
     path = os.getenv("FIREBASE_SERVICE_ACCOUNT_PATH", "").strip()
-    if path and os.path.isfile(path):
-        with open(path, encoding="utf-8") as handle:
-            return json.load(handle)
+    if not path:
+        return None
+
+    candidates = [path]
+    if not os.path.isabs(path):
+        backend_root = Path(__file__).resolve().parents[2]
+        candidates.append(str(backend_root / path))
+
+    for candidate in candidates:
+        if os.path.isfile(candidate):
+            with open(candidate, encoding="utf-8") as handle:
+                return json.load(handle)
     return None
 
 
